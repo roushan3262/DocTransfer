@@ -161,7 +161,7 @@ const SignatureFieldEditor: React.FC<SignatureFieldEditorProps> = ({ file, signe
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                     <h2 style={{ fontSize: '1.1rem', fontWeight: '600', color: '#111827' }}>Prepare Document</h2>
                     <span style={{ fontSize: '0.9rem', color: '#6b7280' }}>
-                        Drag and drop fields onto the document
+                        Drag and drop fields, or click to add
                     </span>
                 </div>
                 <div style={{ display: 'flex', gap: '1rem' }}>
@@ -239,6 +239,21 @@ const SignatureFieldEditor: React.FC<SignatureFieldEditorProps> = ({ file, signe
                                     onDragStart={(e) => {
                                         setDraggingType(field.type);
                                         e.dataTransfer.effectAllowed = 'copy';
+                                    }}
+                                    onClick={() => {
+                                        // "Click to add" fallback
+                                        const newField: SignatureField = {
+                                            id: Math.random().toString(36).substring(2, 9),
+                                            type: field.type as any,
+                                            page: 1, // Default to page 1 or visible page
+                                            x: 50 - 7.5, // Center X (15% width)
+                                            y: 50 - 2.5, // Center Y (5% height)
+                                            width: 15,
+                                            height: 5,
+                                            signerId: selectedSignerId,
+                                            required: true
+                                        };
+                                        setFields([...fields, newField]);
                                     }}
                                     style={{
                                         display: 'flex', alignItems: 'center', gap: '0.75rem',

@@ -1,24 +1,35 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import SignatureCanvas from 'react-signature-canvas';
-import { X, RotateCcw, Check, Type } from 'lucide-react';
+import { X, RotateCcw, Upload as UploadIcon, PenTool } from 'lucide-react';
 
 interface SignatureCanvasComponentProps {
-    onSave: (signatureData: string, type: 'drawn' | 'typed') => void;
+    onSave: (signatureData: string, type: 'drawn' | 'typed' | 'uploaded') => void;
     onClose: () => void;
     title?: string;
     isInitials?: boolean;
+    defaultValue?: string; // e.g. Pre-filled full name
 }
 
 const SignatureCanvasComponent: React.FC<SignatureCanvasComponentProps> = ({
     onSave,
     onClose,
-    title = 'Add Your Signature',
-    isInitials = false
+    title = 'Sign agreement',
+    isInitials = false,
+    defaultValue = ''
 }) => {
     const sigCanvas = useRef<SignatureCanvas>(null);
-    const [activeTab, setActiveTab] = useState<'draw' | 'type'>('draw');
-    const [typedSignature, setTypedSignature] = useState('');
+    const containerRef = useRef<HTMLDivElement>(null);
+    const [activeTab, setActiveTab] = useState<'draw' | 'type' | 'upload'>('draw');
+
+    // Name inputs
+    const [firstName, setFirstName] = useState('');
+    const [lastName, setLastName] = useState('');
+    const [initials, setInitials] = useState('');
+
+    // Signatures
     const [selectedFont, setSelectedFont] = useState('Brush Script MT');
+    const [uploadedImage, setUploadedImage] = useState<string | null>(null);
+    const [canvasWidth, setCanvasWidth] = useState(500);
 
     const fonts = [
         'Brush Script MT',
@@ -28,45 +39,101 @@ const SignatureCanvasComponent: React.FC<SignatureCanvasComponentProps> = ({
         'Monotype Corsiva'
     ];
 
+    // Initialize from defaultValue
+    useEffect(() => {
+        if (defaultValue) {
+            const parts = defaultValue.split(' ');
+            if (parts.length > 0) setFirstName(parts[0]);
+            if (parts.length > 1) setLastName(parts.slice(1).join(' '));
+        }
+    }, [defaultValue]);
+
+    // Auto-update initials
+    useEffect(() => {
+        const fn = firstName.trim();
+        const ln = lastName.trim();
+        if (fn || ln) {
+            setInitials(`${fn.charAt(0)}${ln.charAt(0)}`.toUpperCase());
+        }
+    }, [firstName, lastName]);
+
+    // Handle responsive canvas sizing
+    useEffect(() => {
+        const updateWidth = () => {
+            if (containerRef.current) {
+                const width = containerRef.current.clientWidth - 4; // Subtract borders
+                setCanvasWidth(width);
+            }
+        };
+
+        updateWidth();
+        window.addEventListener('resize', updateWidth);
+        const timer = setTimeout(updateWidth, 100); // Slight delay for modal render
+        return () => {
+            window.removeEventListener('resize', updateWidth);
+            clearTimeout(timer);
+        };
+    }, [activeTab]);
+
     const clearCanvas = () => {
         sigCanvas.current?.clear();
     };
 
-    const handleSaveDrawn = () => {
-        if (sigCanvas.current?.isEmpty()) {
-            alert('Please provide a signature first');
+    const handleSave = () => {
+        // Validation
+        if (!firstName.trim() || !lastName.trim()) {
+            alert('Please enter your first and last name.');
             return;
         }
 
-        const signatureData = sigCanvas.current?.toDataURL('image/png');
-        if (signatureData) {
-            onSave(signatureData, 'drawn');
+        if (activeTab === 'draw') {
+            if (sigCanvas.current?.isEmpty()) {
+                alert('Please provide a signature first');
+                return;
+            }
+            const signatureData = sigCanvas.current?.toDataURL('image/png');
+            if (signatureData) onSave(signatureData, 'drawn');
+
+        } else if (activeTab === 'type') {
+            // Render typed signature
+            const canvas = document.createElement('canvas');
+            canvas.width = 600;
+            canvas.height = 200;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+                ctx.fillStyle = 'rgba(255, 255, 255, 0)';
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = 'black';
+                ctx.font = `60px "${selectedFont}", cursive`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                const text = isInitials ? initials : `${firstName} ${lastName}`;
+                ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+
+                onSave(canvas.toDataURL('image/png'), 'typed');
+            }
+
+        } else if (activeTab === 'upload') {
+            if (!uploadedImage) {
+                alert('Please upload an image first');
+                return;
+            }
+            onSave(uploadedImage, 'uploaded');
         }
     };
 
-    const handleSaveTyped = () => {
-        if (!typedSignature.trim()) {
-            alert('Please type your signature');
-            return;
-        }
-
-        // Create canvas to render typed signature
-        const canvas = document.createElement('canvas');
-        canvas.width = 400;
-        canvas.height = 150;
-        const ctx = canvas.getContext('2d');
-
-        if (ctx) {
-            ctx.fillStyle = 'white';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            ctx.fillStyle = 'black';
-            ctx.font = `48px "${selectedFont}", cursive`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(typedSignature, canvas.width / 2, canvas.height / 2);
-
-            const signatureData = canvas.toDataURL('image/png');
-            onSave(signatureData, 'typed');
+    const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (file) {
+            if (file.size > 5 * 1024 * 1024) {
+                alert('File size too large. Please upload an image smaller than 5MB.');
+                return;
+            }
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                if (event.target?.result) setUploadedImage(event.target.result as string);
+            };
+            reader.readAsDataURL(file);
         }
     };
 
@@ -91,228 +158,205 @@ const SignatureCanvasComponent: React.FC<SignatureCanvasComponentProps> = ({
                 style={{
                     background: 'white',
                     borderRadius: '20px',
-                    padding: '2rem',
-                    maxWidth: '600px',
+                    padding: '2.5rem',
+                    maxWidth: '700px',
                     width: '100%',
-                    boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)'
+                    boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    maxHeight: '95vh',
+                    overflowY: 'auto'
                 }}
                 onClick={(e) => e.stopPropagation()}
             >
                 {/* Header */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-                    <h2 style={{ fontSize: '1.5rem', fontWeight: '700', color: '#111827' }}>
-                        {title}
-                    </h2>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '2rem' }}>
+                    <div>
+                        <div style={{ width: '48px', height: '48px', background: 'white', border: '1px solid #e5e7eb', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '1rem' }}>
+                            <PenTool size={24} color="#111827" />
+                        </div>
+                        <h2 style={{ fontSize: '1.5rem', fontWeight: '700', color: '#111827', marginBottom: '0.25rem' }}>
+                            {title}
+                        </h2>
+                        <p style={{ color: '#6b7280' }}>Confirm your name, initials, and signature.</p>
+                    </div>
                     <button
                         onClick={onClose}
                         style={{
-                            background: '#f3f4f6',
-                            border: 'none',
-                            borderRadius: '8px',
-                            width: '36px',
-                            height: '36px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            cursor: 'pointer'
+                            background: 'white', border: '1px solid #e5e7eb', borderRadius: '8px',
+                            width: '36px', height: '36px', display: 'flex', alignItems: 'center',
+                            justifyContent: 'center', cursor: 'pointer'
                         }}
                     >
                         <X size={20} color="#6b7280" />
                     </button>
                 </div>
 
-                {/* Tabs */}
-                <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem', background: '#f3f4f6', padding: '0.5rem', borderRadius: '10px' }}>
-                    <button
-                        onClick={() => setActiveTab('draw')}
-                        style={{
-                            flex: 1,
-                            padding: '0.625rem',
-                            background: activeTab === 'draw' ? '#4f46e5' : 'transparent',
-                            color: activeTab === 'draw' ? 'white' : '#6b7280',
-                            border: 'none',
-                            borderRadius: '8px',
-                            fontWeight: '600',
-                            cursor: 'pointer',
-                            transition: 'all 0.2s'
-                        }}
-                    >
-                        Draw
-                    </button>
-                    <button
-                        onClick={() => setActiveTab('type')}
-                        style={{
-                            flex: 1,
-                            padding: '0.625rem',
-                            background: activeTab === 'type' ? '#4f46e5' : 'transparent',
-                            color: activeTab === 'type' ? 'white' : '#6b7280',
-                            border: 'none',
-                            borderRadius: '8px',
-                            fontWeight: '600',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            gap: '0.5rem',
-                            transition: 'all 0.2s'
-                        }}
-                    >
-                        <Type size={18} />
-                        Type
-                    </button>
+                {/* Name Inputs */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '1.5rem' }}>
+                    <div>
+                        <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: '600', color: '#374151', marginBottom: '0.5rem' }}>
+                            First name <span style={{ color: '#7c3aed' }}>*</span>
+                        </label>
+                        <input
+                            type="text"
+                            value={firstName}
+                            onChange={(e) => setFirstName(e.target.value)}
+                            style={{ width: '100%', padding: '0.75rem', border: '1px solid #d1d5db', borderRadius: '8px', outline: 'none' }}
+                        />
+                    </div>
+                    <div>
+                        <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: '600', color: '#374151', marginBottom: '0.5rem' }}>
+                            Last name <span style={{ color: '#7c3aed' }}>*</span>
+                        </label>
+                        <input
+                            type="text"
+                            value={lastName}
+                            onChange={(e) => setLastName(e.target.value)}
+                            style={{ width: '100%', padding: '0.75rem', border: '1px solid #d1d5db', borderRadius: '8px', outline: 'none' }}
+                        />
+                    </div>
                 </div>
 
-                {/* Draw Tab */}
-                {activeTab === 'draw' && (
-                    <div>
-                        <div
-                            style={{
-                                border: '2px dashed #d1d5db',
-                                borderRadius: '12px',
-                                background: '#f9fafb',
-                                marginBottom: '1rem',
-                                overflow: 'hidden'
-                            }}
-                        >
-                            <SignatureCanvas
-                                ref={sigCanvas}
-                                canvasProps={{
-                                    width: 532,
-                                    height: 200,
-                                    style: {
-                                        width: '100%',
-                                        height: '200px',
-                                        cursor: 'crosshair'
-                                    }
-                                }}
-                                backgroundColor="#f9fafb"
-                                penColor="#000000"
-                            />
+                <div style={{ marginBottom: '2rem' }}>
+                    <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: '600', color: '#374151', marginBottom: '0.5rem' }}>
+                        Initials <span style={{ color: '#7c3aed' }}>*</span>
+                    </label>
+                    <div style={{ width: '100px' }}>
+                        <input
+                            type="text"
+                            value={initials}
+                            onChange={(e) => setInitials(e.target.value)}
+                            style={{ width: '100%', padding: '0.75rem', border: '1px solid #d1d5db', borderRadius: '8px', outline: 'none' }}
+                        />
+                    </div>
+                </div>
+
+                {/* Signature Area */}
+                <div>
+                    <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: '600', color: '#374151', marginBottom: '0.5rem' }}>
+                        {isInitials ? 'Initials' : 'Signature'} <span style={{ color: '#7c3aed' }}>*</span>
+                    </label>
+
+                    <div style={{ border: '1px solid #e5e7eb', borderRadius: '12px', overflow: 'hidden' }}>
+                        {/* Canvas/Preview Area */}
+                        <div style={{ height: '250px', background: '#f9fafb', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }} ref={containerRef}>
+                            {activeTab === 'draw' && (
+                                <SignatureCanvas
+                                    ref={sigCanvas}
+                                    canvasProps={{ width: canvasWidth, height: 250, style: { width: '100%', height: '100%', cursor: 'crosshair' } }}
+                                    backgroundColor="#f9fafb"
+                                    penColor="black"
+                                />
+                            )}
+                            {activeTab === 'type' && (
+                                <div style={{ fontSize: '4rem', fontFamily: `"${selectedFont}", cursive`, userSelect: 'none' }}>
+                                    {isInitials ? initials : `${firstName} ${lastName}` || 'Signature'}
+                                </div>
+                            )}
+                            {activeTab === 'upload' && (
+                                uploadedImage ?
+                                    <img src={uploadedImage} alt="Uploaded" style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain' }} />
+                                    : <div style={{ color: '#9ca3af' }}>No image uploaded</div>
+                            )}
                         </div>
 
-                        <div style={{ display: 'flex', gap: '0.75rem' }}>
+                        {/* Tabs / Footer Actions */}
+                        <div style={{ borderTop: '1px solid #e5e7eb', padding: '0.5rem', display: 'flex', background: 'white' }}>
                             <button
-                                onClick={clearCanvas}
+                                onClick={() => setActiveTab('draw')}
                                 style={{
-                                    flex: 1,
-                                    padding: '0.75rem',
-                                    background: '#f3f4f6',
-                                    color: '#374151',
-                                    border: 'none',
-                                    borderRadius: '10px',
-                                    fontWeight: '600',
-                                    cursor: 'pointer',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    gap: '0.5rem'
+                                    flex: 1, padding: '0.75rem', background: activeTab === 'draw' ? 'white' : 'transparent',
+                                    fontWeight: '600', color: activeTab === 'draw' ? '#111827' : '#6b7280',
+                                    border: activeTab === 'draw' ? '1px solid #e5e7eb' : 'none',
+                                    borderBottom: activeTab === 'draw' ? '2px solid #111827' : 'none',
+                                    borderRadius: '6px', cursor: 'pointer', transition: 'all 0.2s'
                                 }}
                             >
-                                <RotateCcw size={18} />
-                                Clear
+                                Draw signature
                             </button>
                             <button
-                                onClick={handleSaveDrawn}
+                                onClick={() => setActiveTab('type')}
                                 style={{
-                                    flex: 2,
-                                    padding: '0.75rem',
-                                    background: '#4f46e5',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '10px',
-                                    fontWeight: '600',
-                                    cursor: 'pointer',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    gap: '0.5rem'
+                                    flex: 1, padding: '0.75rem', background: activeTab === 'type' ? 'white' : 'transparent',
+                                    fontWeight: '600', color: activeTab === 'type' ? '#111827' : '#6b7280',
+                                    border: activeTab === 'type' ? '1px solid #e5e7eb' : 'none',
+                                    borderBottom: activeTab === 'type' ? '2px solid #111827' : 'none',
+                                    borderRadius: '6px', cursor: 'pointer', transition: 'all 0.2s'
                                 }}
                             >
-                                <Check size={18} />
-                                Save Signature
+                                Type signature
+                            </button>
+                            <button
+                                onClick={() => setActiveTab('upload')}
+                                style={{
+                                    flex: 1, padding: '0.75rem', background: activeTab === 'upload' ? 'white' : 'transparent',
+                                    fontWeight: '600', color: activeTab === 'upload' ? '#111827' : '#6b7280',
+                                    border: activeTab === 'upload' ? '1px solid #e5e7eb' : 'none',
+                                    borderBottom: activeTab === 'upload' ? '2px solid #111827' : 'none',
+                                    borderRadius: '6px', cursor: 'pointer', transition: 'all 0.2s'
+                                }}
+                            >
+                                Upload signature
                             </button>
                         </div>
                     </div>
-                )}
 
-                {/* Type Tab */}
-                {activeTab === 'type' && (
-                    <div>
-                        <div style={{ marginBottom: '1rem' }}>
-                            <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: '500', color: '#374151', marginBottom: '0.5rem' }}>
-                                Type your {isInitials ? 'initials' : 'full name'}
-                            </label>
-                            <input
-                                type="text"
-                                value={typedSignature}
-                                onChange={(e) => setTypedSignature(e.target.value)}
-                                placeholder={isInitials ? 'e.g., JS' : 'e.g., John Smith'}
-                                style={{
-                                    width: '100%',
-                                    padding: '0.75rem 1rem',
-                                    border: '1px solid #d1d5db',
-                                    borderRadius: '10px',
-                                    fontSize: '1rem',
-                                    outline: 'none'
-                                }}
-                                autoFocus
-                            />
-                        </div>
-
-                        <div style={{ marginBottom: '1.5rem' }}>
-                            <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: '500', color: '#374151', marginBottom: '0.5rem' }}>
-                                Choose a font
-                            </label>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                                {fonts.map((font) => (
+                    {/* Controls specific to tabs */}
+                    <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        {activeTab === 'draw' && (
+                            <button onClick={clearCanvas} style={{ color: '#ef4444', background: 'none', border: 'none', cursor: 'pointer', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                                <RotateCcw size={16} /> Clear
+                            </button>
+                        )}
+                        {activeTab === 'type' && (
+                            <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                {fonts.slice(0, 3).map(font => (
                                     <button
                                         key={font}
                                         onClick={() => setSelectedFont(font)}
                                         style={{
-                                            padding: '0.75rem 1rem',
-                                            background: selectedFont === font ? '#e0e7ff' : '#f9fafb',
-                                            border: selectedFont === font ? '2px solid #4f46e5' : '1px solid #e5e7eb',
-                                            borderRadius: '8px',
-                                            fontFamily: `"${font}", cursive`,
-                                            fontSize: '1.25rem',
-                                            textAlign: 'left',
-                                            cursor: 'pointer',
-                                            transition: 'all 0.2s'
+                                            padding: '0.25rem 0.5rem',
+                                            border: selectedFont === font ? '1px solid #4f46e5' : '1px solid #e5e7eb',
+                                            borderRadius: '4px',
+                                            background: selectedFont === font ? '#e0e7ff' : 'white',
+                                            fontFamily: font,
+                                            cursor: 'pointer'
                                         }}
-                                    >
-                                        {typedSignature || (isInitials ? 'Your Initials' : 'Your Name')}
-                                    </button>
+                                    >Aa</button>
                                 ))}
                             </div>
-                        </div>
-
-                        <button
-                            onClick={handleSaveTyped}
-                            disabled={!typedSignature.trim()}
-                            style={{
-                                width: '100%',
-                                padding: '0.875rem',
-                                background: !typedSignature.trim() ? '#9ca3af' : '#4f46e5',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '10px',
-                                fontWeight: '600',
-                                cursor: !typedSignature.trim() ? 'not-allowed' : 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                gap: '0.5rem'
-                            }}
-                        >
-                            <Check size={18} />
-                            Save Signature
-                        </button>
+                        )}
+                        {activeTab === 'upload' && (
+                            <label style={{ cursor: 'pointer', color: '#4f46e5', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                                <UploadIcon size={16} /> Choose Image
+                                <input type="file" hidden accept="image/*" onChange={handleFileUpload} />
+                            </label>
+                        )}
                     </div>
-                )}
+                </div>
 
-                <p style={{ marginTop: '1rem', fontSize: '0.75rem', color: '#9ca3af', textAlign: 'center' }}>
-                    By clicking "Save Signature", you consent to sign this document electronically
+                {/* Legal Text */}
+                <p style={{ marginTop: '2rem', fontSize: '0.75rem', color: '#6b7280', lineHeight: 1.5 }}>
+                    I agree that the signature and initials will be the electronic representation of my signature and initials for all purposes when I (or my agent) use them on documents, including legally binding contracts - just the same as a pen-and-paper signature or initial.
                 </p>
+
+                {/* Action Buttons */}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem', marginTop: '1.5rem' }}>
+                    <button
+                        onClick={onClose}
+                        style={{ padding: '0.75rem 1.5rem', background: 'white', border: '1px solid #d1d5db', borderRadius: '8px', fontWeight: '600', color: '#374151', cursor: 'pointer' }}
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        onClick={handleSave}
+                        style={{ padding: '0.75rem 1.5rem', background: '#111827', border: 'none', borderRadius: '8px', fontWeight: '600', color: 'white', cursor: 'pointer' }}
+                    >
+                        Insert
+                    </button>
+                </div>
+
             </div>
         </div>
     );

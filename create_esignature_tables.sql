@@ -2,30 +2,8 @@
 -- Creates all necessary tables for comprehensive e-signature functionality
 
 -- =====================================================
--- 1. SIGNATURE FIELDS TABLE
--- Stores draggable field definitions for documents
--- =====================================================
-CREATE TABLE IF NOT EXISTS signature_fields (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-  field_type TEXT NOT NULL CHECK (field_type IN ('signature', 'initials', 'text', 'date', 'checkbox')),
-  field_label TEXT,
-  page_number INTEGER NOT NULL DEFAULT 1,
-  position_x DECIMAL NOT NULL, -- X coordinate as percentage (0-100)
-  position_y DECIMAL NOT NULL, -- Y coordinate as percentage (0-100)
-  width DECIMAL NOT NULL DEFAULT 150, -- Width in pixels
-  height DECIMAL NOT NULL DEFAULT 50, -- Height in pixels
-  assigned_signer_id UUID REFERENCES document_signers(id) ON DELETE CASCADE,
-  is_required BOOLEAN DEFAULT true,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_signature_fields_document_id ON signature_fields(document_id);
-CREATE INDEX IF NOT EXISTS idx_signature_fields_signer_id ON signature_fields(assigned_signer_id);
-
--- =====================================================
--- 2. DOCUMENT SIGNERS TABLE
--- Tracks all signers for a document
+-- 1. DOCUMENT SIGNERS TABLE
+-- Tracks all signers for a document (MUST BE CREATED FIRST)
 -- =====================================================
 CREATE TABLE IF NOT EXISTS document_signers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -47,6 +25,28 @@ CREATE TABLE IF NOT EXISTS document_signers (
 CREATE INDEX IF NOT EXISTS idx_document_signers_document_id ON document_signers(document_id);
 CREATE INDEX IF NOT EXISTS idx_document_signers_signing_link ON document_signers(signing_link);
 CREATE INDEX IF NOT EXISTS idx_document_signers_status ON document_signers(status);
+
+-- =====================================================
+-- 2. SIGNATURE FIELDS TABLE
+-- Stores draggable field definitions for documents
+-- =====================================================
+CREATE TABLE IF NOT EXISTS signature_fields (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  field_type TEXT NOT NULL CHECK (field_type IN ('signature', 'initials', 'text', 'date', 'checkbox')),
+  field_label TEXT,
+  page_number INTEGER NOT NULL DEFAULT 1,
+  position_x DECIMAL NOT NULL, -- X coordinate as percentage (0-100)
+  position_y DECIMAL NOT NULL, -- Y coordinate as percentage (0-100)
+  width DECIMAL NOT NULL DEFAULT 150, -- Width in pixels
+  height DECIMAL NOT NULL DEFAULT 50, -- Height in pixels
+  assigned_signer_id UUID REFERENCES document_signers(id) ON DELETE CASCADE,
+  is_required BOOLEAN DEFAULT true,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_signature_fields_document_id ON signature_fields(document_id);
+CREATE INDEX IF NOT EXISTS idx_signature_fields_signer_id ON signature_fields(assigned_signer_id);
 
 -- =====================================================
 -- 3. SIGNATURE RECORDS TABLE

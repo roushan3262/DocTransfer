@@ -115,44 +115,67 @@ const ViewDocument: React.FC = () => {
 
     const trackView = async (documentId: string) => {
         try {
-            // Get or create viewer ID
-            let viewerId = localStorage.getItem('doc_viewer_id');
-            if (!viewerId) {
-                viewerId = Math.random().toString(36).substring(2) + Date.now().toString(36);
-                localStorage.setItem('doc_viewer_id', viewerId);
+            // 1. Create Session
+            let geoData = null;
+            try {
+                const res = await fetch('https://geolocation-db.com/json/');
+                geoData = await res.json();
+            } catch (e) {
+                console.warn('Failed to fetch geolocation', e);
             }
 
-            // Insert view record
-            const { data: viewData, error } = await supabase
-                .from('document_views')
+            const { data: sessionData, error: sessionError } = await supabase
+                .from('document_access_sessions')
                 .insert({
                     document_id: documentId,
-                    viewer_id: viewerId,
-                    user_agent: navigator.userAgent
+                    user_agent: navigator.userAgent,
+                    geolocation: geoData
                 })
-                .select()
+                .select('session_id') // Correct column name
                 .single();
 
-            if (!error && viewData) {
-                // Set up duration tracking
-                const startTime = Date.now();
-                const updateDuration = () => {
-                    const duration = Math.round((Date.now() - startTime) / 1000);
-                    if (duration > 0) {
-                        supabase
-                            .from('document_views')
-                            .update({ duration_seconds: duration })
-                            .eq('id', viewData.id)
-                            .then(() => { }); // Fire and forget
-                    }
-                };
+            if (sessionError) {
+                console.error('Session creation failed:', sessionError);
+                return;
+            }
 
-                // Update on unmount or page hide
-                window.addEventListener('beforeunload', updateDuration);
-                return () => {
-                    window.removeEventListener('beforeunload', updateDuration);
-                    updateDuration();
-                };
+            if (sessionData) {
+                // 2. Track View (Initial)
+                const { data: viewData, error: viewError } = await supabase
+                    .from('document_view_tracking')
+                    .insert({
+                        session_id: sessionData.session_id,
+                        document_id: documentId,
+                        page_number: 1 // Default to page 1 for now
+                    })
+                    .select('id')
+                    .single();
+
+                if (viewData && !viewError) {
+                    // Set up duration tracking
+                    const startTime = Date.now();
+                    const updateDuration = () => {
+                        const duration = Math.round((Date.now() - startTime) / 1000);
+                        if (duration > 0) {
+                            supabase
+                                .from('document_view_tracking')
+                                .update({ duration_seconds: duration })
+                                .eq('id', viewData.id)
+                                .then(() => { }); // Fire and forget
+                        }
+                    };
+
+                    // Update on unmount or page hide
+                    window.addEventListener('beforeunload', updateDuration);
+                    // Also update every 10 seconds for real-time feel
+                    const intervalId = setInterval(updateDuration, 10000);
+
+                    return () => {
+                        window.removeEventListener('beforeunload', updateDuration);
+                        clearInterval(intervalId);
+                        updateDuration();
+                    };
+                }
             }
         } catch (err) {
             console.error('Error tracking view:', err);

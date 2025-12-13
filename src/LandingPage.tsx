@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { SignedIn, SignedOut, SignInButton, UserButton } from '@clerk/clerk-react';
 import {
   Shield,
   FileText,
@@ -91,9 +92,19 @@ const LandingPage: React.FC = () => {
             <a href="#pricing">Pricing</a>
             <a href="#security">Security</a>
           </div>
-          <Link to="/dataroom">
-            <button className="btn-primary">Get Started</button>
-          </Link>
+          <SignedOut>
+            <SignInButton mode="modal">
+              <button className="btn-primary">Sign In</button>
+            </SignInButton>
+          </SignedOut>
+          <SignedIn>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+              <Link to="/dataroom">
+                <button className="btn-secondary" style={{ padding: '0.5rem 1rem' }}>Dashboard</button>
+              </Link>
+              <UserButton afterSignOutUrl="/" />
+            </div>
+          </SignedIn>
         </nav>
       </header>
 

@@ -2501,3 +2501,57 @@ input:focus+.toggle-slider {
   justify-content: center;
   z-index: 10;
 }
+/* Trusted By Section */
+.trusted-by {
+  padding: 3rem 2rem 4rem;
+  background-color: #fafafa;
+  border-bottom: 1px solid #e5e7eb;
+  text-align: center;
+}
+
+.trusted-by h4 {
+  color: var(--text-light);
+  font-size: 0.875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 600;
+  margin-bottom: 3rem;
+  opacity: 0.8;
+}
+
+.company-logos {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 4rem;
+  max-width: var(--max-width);
+  margin: 0 auto;
+}
+
+.company-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.6;
+  transition: all 0.3s ease;
+  cursor: default;
+  filter: grayscale(100%);
+}
+
+.company-logo:hover {
+  opacity: 1;
+  filter: grayscale(0%);
+  transform: translateY(-2px);
+}
+
+@media (max-width: 768px) {
+  .company-logos {
+    gap: 2rem;
+  }
+  
+  .company-logo {
+    transform: scale(0.85);
+  }
+}
+

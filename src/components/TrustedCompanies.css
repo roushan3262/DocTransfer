@@ -1,0 +1,187 @@
+/* TrustedCompanies.css */
+
+.trusted-companies-section {
+  padding: 3rem 0;
+  /* py-12 */
+  background-color: #ffffff;
+  /* bg-white */
+  border-bottom: 1px solid rgba(243, 244, 246, 0.5);
+  /* border-gray-100/50 */
+  width: 100%;
+}
+
+.trusted-companies-container {
+  max-width: 80rem;
+  /* max-w-7xl */
+  margin: 0 auto;
+  padding: 0 1rem;
+  /* px-4 */
+}
+
+@media (min-width: 640px) {
+  .trusted-companies-container {
+    padding: 0 1.5rem;
+    /* sm:px-6 */
+  }
+}
+
+@media (min-width: 1024px) {
+  .trusted-companies-container {
+    padding: 0 2rem;
+    /* lg:px-8 */
+  }
+}
+
+.trusted-companies-title {
+  text-align: center;
+  font-size: 0.875rem;
+  /* text-sm */
+  font-weight: 500;
+  /* font-medium */
+  color: #9ca3af;
+  /* text-gray-400 */
+  margin-bottom: 2rem;
+  /* mb-8 */
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  /* tracking-wider */
+}
+
+.trusted-companies-logos {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  column-gap: 3rem;
+  /* gap-x-12 */
+  row-gap: 2rem;
+  /* gap-y-8 */
+  opacity: 0.7;
+  filter: grayscale(100%);
+  transition: all 0.5s ease;
+}
+
+.trusted-companies-logos:hover {
+  filter: grayscale(0%);
+  opacity: 1;
+}
+
+.company-logo-item {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  transition: transform 0.3s ease;
+  gap: 0.5rem;
+}
+
+.company-logo-item:hover {
+  transform: scale(1.05);
+  /* hover:scale-105 */
+}
+
+.yuno-text {
+  font-family: 'Inter', sans-serif;
+  font-weight: 800;
+  font-size: 1.8rem;
+  color: #8b5cf6;
+  letter-spacing: -0.05em;
+}
+
+.yuno-tm {
+  font-size: 0.6rem;
+  align-self: flex-start;
+  margin-top: 4px;
+  color: #8b5cf6;
+}
+
+.dpworld-text {
+  font-family: sans-serif;
+  font-weight: 700;
+  font-size: 1.25rem;
+  color: #1e1b4b;
+}
+
+.realtor-text {
+  font-family: 'Times New Roman', serif;
+  font-weight: 700;
+  font-size: 1.5rem;
+  color: #dc2626;
+}
+
+.brevo-text {
+  font-family: sans-serif;
+  font-weight: 600;
+  font-size: 1.8rem;
+  color: #059669;
+  letter-spacing: -0.02em;
+}
+
+.vercel-text {
+  font-family: sans-serif;
+  font-weight: 700;
+  font-size: 1.5rem;
+  color: #000;
+}
+
+.mistral-text {
+  font-family: sans-serif;
+  font-weight: 400;
+  font-size: 1.5rem;
+  color: #9ca3af;
+}
+
+.mistral-icon-grid {
+  display: flex;
+  gap: 2px;
+}
+
+
+/* Marquee Animation */
+.trusted-companies-marquee-mask {
+  width: 100%;
+  overflow: hidden;
+  position: relative;
+  /* Add fading gradient on sides */
+  mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent);
+  -webkit-mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent);
+}
+
+.trusted-companies-marquee-track {
+  display: flex;
+  width: max-content;
+  gap: 4rem;
+  /* increased gap for moving logos */
+  animation: scroll 40s linear infinite;
+}
+
+.trusted-companies-marquee-track:hover {
+  animation-play-state: paused;
+}
+
+@keyframes scroll {
+  0% {
+    transform: translateX(0);
+  }
+
+  100% {
+    transform: translateX(-50%);
+    /* Move half the width (since we duplicate content) */
+  }
+}
+
+/* Adjust logos for scrolling */
+.trusted-companies-logos {
+  /* Reset the previous wrap/center styles since they are now in a track */
+  display: flex;
+  flex-wrap: nowrap;
+  /* Prevent wrapping */
+  gap: 4rem;
+  opacity: 0.7;
+  filter: grayscale(100%);
+  transition: all 0.5s ease;
+}
+
+/* Ensure individual items don't shrink */
+.company-logo-item {
+  flex-shrink: 0;
+}

@@ -22,7 +22,12 @@ import { encryptFile } from './lib/crypto';
 import { hashPassword } from './lib/security';
 import GoogleDriveTab from './components/GoogleDriveTab';
 import BrandingSettings from './components/BrandingSettings';
+import AnalyticsDashboard from './components/analytics/AnalyticsDashboard';
 import DashboardAnimation from './components/DashboardAnimation';
+import SignerManagement, { type Signer } from './components/SignerManagement';
+import SignatureFieldEditor, { type SignatureField } from './components/SignatureFieldEditor';
+import { setupDocumentESignature } from './lib/esignature';
+import { logDocumentUpload, logLinkCopy } from './lib/auditLogger';
 
 interface Document {
     id: string;
@@ -41,9 +46,10 @@ interface Document {
 }
 
 const DataRoom: React.FC = () => {
-    const [, setDocuments] = useState<Document[]>([]);
+    const [documents, setDocuments] = useState<Document[]>([]);
     const [isDragging, setIsDragging] = useState(false);
     const [activeTab, setActiveTab] = useState<'upload' | 'google-drive' | 'documents' | 'analytics' | 'settings' | 'branding'>('upload');
+    const [selectedDocumentId, setSelectedDocumentId] = useState<string | undefined>(undefined);
 
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
     const [uploadedDoc, setUploadedDoc] = useState<Document | null>(null);
@@ -65,6 +71,13 @@ const DataRoom: React.FC = () => {
     const [allowedEmail, setAllowedEmail] = useState('');
     const [applyWatermark, setApplyWatermark] = useState(false);
     const [requestSignature, setRequestSignature] = useState(false);
+
+    // E-Signature State
+    const [signers, setSigners] = useState<Signer[]>([]);
+    const [signatureFields, setSignatureFields] = useState<SignatureField[]>([]);
+    const [signatureWorkflowType, setSignatureWorkflowType] = useState<'sequential' | 'parallel'>('sequential');
+    const [showFieldEditor, setShowFieldEditor] = useState(false);
+    const [signingLinks, setSigningLinks] = useState<any[]>([]);
 
     // Create preview URL when file is selected
     useEffect(() => {
@@ -252,6 +265,38 @@ const DataRoom: React.FC = () => {
 
             setDocuments(prev => [newDoc, ...prev]);
             setUploadedDoc(newDoc);
+
+            // Log audit event for document upload
+            await logDocumentUpload(docData.id, selectedFile.name, selectedFile.size, {
+                metadata: {
+                    passwordProtected: passwordProtection,
+                    expirationSet: linkExpiration,
+                    downloadsAllowed: allowDownloads,
+                    signatureRequired: requestSignature
+                }
+            });
+
+            // If e-signature is requested, setup signers and fields
+            if (requestSignature && signers.length > 0 && signatureFields.length > 0) {
+                try {
+                    const result = await setupDocumentESignature(
+                        docData.id,
+                        signers,
+                        signatureFields,
+                        signatureWorkflowType
+                    );
+
+                    if (result.success && result.signingLinks) {
+                        setSigningLinks(result.signingLinks);
+                        console.log('E-signature setup complete:', result.signingLinks);
+                    } else {
+                        console.error('E-signature setup failed:', result.error);
+                    }
+                } catch (esigError) {
+                    console.error('E-signature error:', esigError);
+                }
+            }
+
             setSelectedFile(null);
 
         } catch (error: any) {
@@ -268,6 +313,11 @@ const DataRoom: React.FC = () => {
         navigator.clipboard.writeText(link);
         setCopiedId('link');
         setTimeout(() => setCopiedId(null), 2000);
+
+        // Log link copy event
+        if (uploadedDoc?.id) {
+            logLinkCopy(uploadedDoc.id, 'share');
+        }
     };
 
     const handlePreview = async () => {
@@ -348,7 +398,86 @@ const DataRoom: React.FC = () => {
                 ) : activeTab === 'google-drive' ? (
                     <GoogleDriveTab onDocumentUploaded={fetchDocuments} />
                 ) : activeTab === 'analytics' ? (
-                    <div></div>
+                    <AnalyticsDashboard documentId={selectedDocumentId} />
+                ) : activeTab === 'documents' ? (
+                    <div className="animate-fade-in">
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+                            <h2 style={{ fontSize: '1.5rem', fontWeight: '700', color: '#111827' }}>My Documents</h2>
+                            <div style={{ display: 'flex', gap: '1rem' }}>
+                                <input
+                                    type="text"
+                                    placeholder="Search documents..."
+                                    style={{ padding: '0.5rem 1rem', borderRadius: '8px', border: '1px solid #d1d5db', minWidth: '250px' }}
+                                />
+                            </div>
+                        </div>
+
+                        {documents.length === 0 ? (
+                            <div style={{ textAlign: 'center', padding: '4rem', background: 'white', borderRadius: '12px', border: '1px solid #e5e7eb' }}>
+                                <FileText size={48} color="#9ca3af" style={{ marginBottom: '1rem' }} />
+                                <h3 style={{ fontSize: '1.125rem', fontWeight: '600', color: '#374151', marginBottom: '0.5rem' }}>No documents found</h3>
+                                <p style={{ color: '#6b7280', marginBottom: '1.5rem' }}>Upload your first document to get started.</p>
+                                <button
+                                    onClick={() => setActiveTab('upload')}
+                                    style={{ padding: '0.75rem 1.5rem', background: '#4f46e5', color: 'white', borderRadius: '8px', border: 'none', fontWeight: '500', cursor: 'pointer' }}
+                                >
+                                    Upload Document
+                                </button>
+                            </div>
+                        ) : (
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1.5rem' }}>
+                                {documents.map(doc => (
+                                    <div key={doc.id} style={{ background: 'white', borderRadius: '12px', border: '1px solid #e5e7eb', overflow: 'hidden', boxShadow: '0 1px 2px rgba(0,0,0,0.05)', transition: 'transform 0.2s', cursor: 'pointer' }}
+                                        onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'}
+                                        onMouseLeave={(e) => e.currentTarget.style.transform = 'translateY(0)'}
+                                    >
+                                        <div style={{ padding: '1.25rem', borderBottom: '1px solid #f3f4f6', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                                <div style={{ padding: '0.5rem', background: '#eff6ff', borderRadius: '8px', color: '#3b82f6' }}>
+                                                    <FileText size={20} />
+                                                </div>
+                                                <div>
+                                                    <h3 style={{ fontSize: '1rem', fontWeight: '600', color: '#111827', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '160px' }}>{doc.name}</h3>
+                                                    <p style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '0.25rem' }}>{doc.size} • {doc.uploadedAt}</p>
+                                                </div>
+                                            </div>
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    // Copy link logic
+                                                    navigator.clipboard.writeText(doc.link);
+                                                    setCopiedId(doc.id);
+                                                    setTimeout(() => setCopiedId(null), 2000);
+                                                }}
+                                                style={{ padding: '0.5rem', background: 'transparent', border: 'none', cursor: 'pointer', color: copiedId === doc.id ? '#10b981' : '#9ca3af' }}
+                                            >
+                                                {copiedId === doc.id ? <Check size={18} /> : <Copy size={18} />}
+                                            </button>
+                                        </div>
+                                        <div style={{ padding: '1rem', background: '#f9fafb', display: 'flex', gap: '0.5rem' }}>
+                                            <a
+                                                href={doc.link}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                style={{ flex: 1, padding: '0.5rem', textAlign: 'center', background: 'white', border: '1px solid #e5e7eb', borderRadius: '6px', color: '#374151', textDecoration: 'none', fontSize: '0.875rem', fontWeight: '500' }}
+                                            >
+                                                View
+                                            </a>
+                                            <button
+                                                onClick={() => {
+                                                    setSelectedDocumentId(doc.id);
+                                                    setActiveTab('analytics');
+                                                }}
+                                                style={{ flex: 1, padding: '0.5rem', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '6px', color: '#166534', fontSize: '0.875rem', fontWeight: '500', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.25rem' }}
+                                            >
+                                                <BarChart2 size={16} /> Analytics
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
                 ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
@@ -553,22 +682,95 @@ const DataRoom: React.FC = () => {
                                     </div>
 
                                     {/* E-Signature */}
-                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                                            <PenTool size={18} style={{ color: '#6b7280' }} />
-                                            <span style={{ fontSize: '0.95rem', fontWeight: '500', color: '#374151' }}>Request E-Signature</span>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                                <PenTool size={18} style={{ color: '#6b7280' }} />
+                                                <span style={{ fontSize: '0.95rem', fontWeight: '500', color: '#374151' }}>Request E-Signature</span>
+                                            </div>
+                                            <label className="toggle-switch">
+                                                <input type="checkbox" checked={requestSignature} onChange={(e) => setRequestSignature(e.target.checked)} />
+                                                <span className="toggle-slider"></span>
+                                            </label>
                                         </div>
-                                        <label className="toggle-switch">
-                                            <input type="checkbox" checked={requestSignature} onChange={(e) => setRequestSignature(e.target.checked)} />
-                                            <span className="toggle-slider"></span>
-                                        </label>
+                                        {requestSignature && (
+                                            <>
+                                                <div style={{ marginLeft: '2rem', padding: '1rem', background: '#fef3c7', border: '1px solid #fbbf24', borderRadius: '8px', fontSize: '0.875rem' }}>
+                                                    <p style={{ color: '#92400e', marginBottom: '0.5rem', fontWeight: '500' }}>📝 E-Signature Workflow</p>
+                                                    <ol style={{ color: '#92400e', marginLeft: '1.25rem', lineHeight: '1.5' }}>
+                                                        <li>Add signers below</li>
+                                                        <li>Upload your document</li>
+                                                        <li>Place signature fields on the document</li>
+                                                        <li>Get signing links for each signer</li>
+                                                    </ol>
+                                                </div>
+
+                                                {/* Workflow Type Selector */}
+                                                <div style={{ marginLeft: '2rem', padding: '0.75rem', background: '#f3f4f6', borderRadius: '8px' }}>
+                                                    <label style={{ fontSize: '0.875rem', fontWeight: '500', color: '#374151', display: 'block', marginBottom: '0.5rem' }}>
+                                                        Signing Workflow
+                                                    </label>
+                                                    <div style={{ display: 'flex', gap: '0.5rem', background: 'white', padding: '0.25rem', borderRadius: '6px' }}>
+                                                        <button
+                                                            onClick={() => setSignatureWorkflowType('sequential')}
+                                                            style={{
+                                                                flex: 1,
+                                                                padding: '0.5rem',
+                                                                background: signatureWorkflowType === 'sequential' ? '#8b5cf6' : 'transparent',
+                                                                color: signatureWorkflowType === 'sequential' ? 'white' : '#6b7280',
+                                                                border: 'none',
+                                                                borderRadius: '4px',
+                                                                fontSize: '0.8rem',
+                                                                fontWeight: '500',
+                                                                cursor: 'pointer'
+                                                            }}
+                                                        >
+                                                            Sequential
+                                                        </button>
+                                                        <button
+                                                            onClick={() => setSignatureWorkflowType('parallel')}
+                                                            style={{
+                                                                flex: 1,
+                                                                padding: '0.5rem',
+                                                                background: signatureWorkflowType === 'parallel' ? '#8b5cf6' : 'transparent',
+                                                                color: signatureWorkflowType === 'parallel' ? 'white' : '#6b7280',
+                                                                border: 'none',
+                                                                borderRadius: '4px',
+                                                                fontSize: '0.8rem',
+                                                                fontWeight: '500',
+                                                                cursor: 'pointer'
+                                                            }}
+                                                        >
+                                                            Parallel
+                                                        </button>
+                                                    </div>
+                                                </div>
+
+                                                {/* Signer Management */}
+                                                <div style={{ marginLeft: '2rem' }}>
+                                                    <SignerManagement
+                                                        signers={signers}
+                                                        onSignersChange={setSigners}
+                                                        workflowType={signatureWorkflowType}
+                                                        maxSigners={10}
+                                                    />
+                                                </div>
+                                            </>
+                                        )}
                                     </div>
                                 </div>
 
                                 {/* Upload Button */}
                                 <button
-                                    onClick={handleUpload}
-                                    disabled={!selectedFile || isUploading}
+                                    onClick={() => {
+                                        // If e-signature is enabled and we have a document, show field editor
+                                        if (requestSignature && selectedFile && !uploadedDoc && signers.length > 0) {
+                                            setShowFieldEditor(true);
+                                        } else {
+                                            handleUpload();
+                                        }
+                                    }}
+                                    disabled={!selectedFile || isUploading || (requestSignature && signers.length === 0)}
                                     style={{
                                         width: '100%',
                                         padding: '0.875rem',
@@ -598,267 +800,424 @@ const DataRoom: React.FC = () => {
                             <div style={{ background: 'white', borderRadius: '20px', padding: '2rem', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', border: '1px solid #f3f4f6', display: 'flex', flexDirection: 'column' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
                                     <LinkIcon size={24} style={{ color: '#3b82f6' }} />
-                                    <h2 style={{ fontSize: '1.25rem', fontWeight: '700', color: '#111827' }}>Sharing Link</h2>
+                                    <h2 style={{ fontSize: '1.25rem', fontWeight: '700', color: '#111827' }}>Sharing & Signing</h2>
                                 </div>
-                                <p style={{ color: '#6b7280', fontSize: '0.875rem', marginBottom: '2rem' }}>Your secure, trackable document link</p>
+                                <p style={{ color: '#6b7280', fontSize: '0.875rem', marginBottom: '2rem' }}>Manage links for your document</p>
 
-                                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '1.5rem', minHeight: '400px' }}>
-                                    {uploadedDoc ? (
-                                        <>
-                                            <div style={{ width: '100px', height: '100px', background: '#e0e7ff', borderRadius: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                                <LinkIcon size={48} color="#4f46e5" />
-                                            </div>
-                                            <div style={{ textAlign: 'center' }}>
-                                                <h3 style={{ fontSize: '1.125rem', fontWeight: '700', marginBottom: '0.5rem', color: '#111827' }}>{uploadedDoc.name}</h3>
-                                                <p style={{ color: '#6b7280', fontSize: '0.875rem' }}>{uploadedDoc.size} • Ready to share</p>
-                                            </div>
-                                            <div style={{ width: '100%', padding: '1rem', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '1.5rem', minHeight: '400px' }}>
+                                    {uploadedDoc && (
+                                        <div style={{ padding: '1.5rem', background: '#f9fafb', borderRadius: '12px', border: '1px solid #e5e7eb' }}>
+                                            <h3 style={{ fontSize: '1rem', fontWeight: '600', marginBottom: '1rem', color: '#111827' }}>Public Share Link</h3>
+                                            <div style={{ width: '100%', padding: '0.75rem', background: 'white', border: '1px solid #d1d5db', borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                                                 <input
                                                     type="text"
                                                     value={uploadedDoc.link}
                                                     readOnly
-                                                    style={{ fontSize: '0.875rem', flex: 1, border: 'none', background: 'transparent', outline: 'none', color: '#6b7280' }}
+                                                    style={{ fontSize: '0.875rem', flex: 1, border: 'none', background: 'transparent', outline: 'none', color: '#374151' }}
                                                 />
                                                 <button
                                                     onClick={() => copyLink(uploadedDoc.link)}
-                                                    style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: '6px', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+                                                    style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: '6px', width: '30px', height: '30px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
                                                 >
-                                                    {copiedId === 'link' ? <Check size={18} color="#16a34a" /> : <Copy size={18} color="#6b7280" />}
+                                                    {copiedId === 'link' ? <Check size={16} color="#16a34a" /> : <Copy size={16} color="#6b7280" />}
                                                 </button>
                                             </div>
-
-                                            {/* Preview Button */}
-                                            <button
-                                                onClick={handlePreview}
-                                                style={{
-                                                    width: '100%',
-                                                    padding: '0.75rem',
-                                                    background: '#f9fafb',
-                                                    border: '1px solid #e5e7eb',
-                                                    borderRadius: '10px',
-                                                    color: '#374151',
-                                                    fontWeight: '600',
-                                                    fontSize: '0.9rem',
-                                                    cursor: 'pointer',
-                                                    display: 'flex',
-                                                    alignItems: 'center',
-                                                    justifyContent: 'center',
-                                                    gap: '0.5rem',
-                                                    transition: 'all 0.2s'
-                                                }}
-                                                onMouseEnter={(e) => e.currentTarget.style.background = '#f3f4f6'}
-                                                onMouseLeave={(e) => e.currentTarget.style.background = '#f9fafb'}
-                                            >
-                                                <Eye size={18} />
-                                                Preview Document
-                                            </button>
-                                        </>
-                                    ) : selectedFile && filePreview ? (
-                                        <>
-                                            <div style={{ textAlign: 'center', marginBottom: '0.5rem' }}>
-                                                <h3 style={{ fontSize: '1.125rem', fontWeight: '700', marginBottom: '0.5rem', color: '#111827' }}>File Preview</h3>
-                                                <p style={{ color: '#6b7280', fontSize: '0.875rem' }}>{selectedFile.name} • {(selectedFile.size / 1024).toFixed(2)} KB</p>
-                                            </div>
-
-                                            {/* Preview Container */}
-                                            <div style={{ width: '100%', maxHeight: '350px', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '1rem', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                                {selectedFile.type.startsWith('image/') ? (
-                                                    <img
-                                                        src={filePreview}
-                                                        alt="Preview"
-                                                        style={{ maxWidth: '100%', maxHeight: '300px', objectFit: 'contain', borderRadius: '8px' }}
-                                                    />
-                                                ) : selectedFile.type === 'application/pdf' ? (
-                                                    <iframe
-                                                        src={filePreview}
-                                                        style={{ width: '100%', height: '300px', border: 'none', borderRadius: '8px' }}
-                                                        title="PDF Preview"
-                                                    />
-                                                ) : selectedFile.type === 'text/plain' ? (
-                                                    <iframe
-                                                        src={filePreview}
-                                                        style={{ width: '100%', height: '300px', border: 'none', borderRadius: '8px', background: 'white' }}
-                                                        title="Text Preview"
-                                                    />
-                                                ) : (
-                                                    <div style={{ textAlign: 'center', padding: '2rem', color: '#6b7280' }}>
-                                                        <FileText size={64} color="#9ca3af" style={{ marginBottom: '1rem' }} />
-                                                        <p style={{ fontSize: '0.875rem' }}>Preview not available for this file type</p>
-                                                        <p style={{ fontSize: '0.75rem', marginTop: '0.5rem', color: '#9ca3af' }}>{selectedFile.type || 'Unknown type'}</p>
-                                                    </div>
-                                                )}
-                                            </div>
-
-                                            <div style={{ width: '100%', textAlign: 'center' }}>
-                                                <p style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem' }}>
-                                                    Click "Generate Secure Link" to upload and create a shareable link
-                                                </p>
-                                            </div>
-                                        </>
-                                    ) : (
-                                        <div style={{ textAlign: 'center', color: '#9ca3af' }}>
-                                            <LinkIcon size={64} style={{ marginBottom: '1rem', color: '#e5e7eb' }} />
-                                            <p style={{ maxWidth: '300px', margin: '0 auto' }}>Upload a document and click "Generate Secure Link" to create a shareable link</p>
                                         </div>
+                                    )}
+
+                                    {signingLinks.length > 0 && (
+                                        <div style={{ padding: '1.5rem', background: '#eff6ff', borderRadius: '12px', border: '1px solid #bfdbfe' }}>
+                                            <h3 style={{ fontSize: '1rem', fontWeight: '600', marginBottom: '1rem', color: '#1e40af' }}>Signer Links</h3>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                                                {signingLinks.map((sl, idx) => (
+                                                    <div key={idx} style={{ padding: '0.75rem', background: 'white', borderRadius: '8px', border: '1px solid #fee2e2' }}>
+                                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                                                            <span style={{ fontSize: '0.85rem', fontWeight: '600', color: '#1f2937' }}>{sl.signer_name}</span>
+                                                            <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>{sl.signer_email}</span>
+                                                        </div>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                                            <input
+                                                                type="text"
+                                                                value={`${window.location.origin}/sign/${sl.signing_link}`}
+                                                                readOnly
+                                                                style={{ fontSize: '0.8rem', flex: 1, border: 'none', background: 'transparent', outline: 'none', color: '#4b5563' }}
+                                                            />
+                                                            <button
+                                                                onClick={() => {
+                                                                    navigator.clipboard.writeText(`${window.location.origin}/sign/${sl.signing_link}`);
+                                                                    setCopiedId(`sl-${idx}`);
+                                                                    setTimeout(() => setCopiedId(null), 2000);
+                                                                }}
+                                                                style={{ background: '#f3f4f6', border: 'none', borderRadius: '4px', padding: '4px', cursor: 'pointer' }}
+                                                            >
+                                                                {copiedId === `sl-${idx}` ? <Check size={14} color="#16a34a" /> : <Copy size={14} color="#6b7280" />}
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {!uploadedDoc && !selectedFile && (
+                                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9ca3af', flexDirection: 'column', gap: '1rem' }}>
+                                            <LinkIcon size={48} opacity={0.2} />
+                                            <p>Upload a file to generate links</p>
+                                        </div>
+                                    )}
+
+                                    {selectedFile && filePreview && !uploadedDoc && (
+                                        <div style={{ width: '100%', maxHeight: '350px', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '1rem', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                            {selectedFile.type.startsWith('image/') ? (
+                                                <img
+                                                    src={filePreview}
+                                                    alt="Preview"
+                                                    style={{ maxWidth: '100%', maxHeight: '300px', objectFit: 'contain', borderRadius: '8px' }}
+                                                />
+                                            ) : selectedFile.type === 'application/pdf' ? (
+                                                <iframe
+                                                    src={filePreview}
+                                                    style={{ width: '100%', height: '300px', border: 'none', borderRadius: '8px' }}
+                                                    title="PDF Preview"
+                                                />
+                                            ) : selectedFile.type === 'text/plain' ? (
+                                                <iframe
+                                                    src={filePreview}
+                                                    style={{ width: '100%', height: '300px', border: 'none', borderRadius: '8px', background: 'white' }}
+                                                    title="Text Preview"
+                                                />
+                                            ) : (
+                                                <div style={{ textAlign: 'center', padding: '2rem', color: '#6b7280' }}>
+                                                    <FileText size={64} color="#9ca3af" style={{ marginBottom: '1rem' }} />
+                                                    <p style={{ fontSize: '0.875rem' }}>Preview not available for this file type</p>
+                                                    <p style={{ fontSize: '0.75rem', marginTop: '0.5rem', color: '#9ca3af' }}>{selectedFile.type || 'Unknown type'}</p>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {uploadedDoc && (
+                                        <button
+                                            onClick={handlePreview}
+                                            style={{
+                                                width: '100%',
+                                                padding: '0.75rem',
+                                                background: '#f9fafb',
+                                                border: '1px solid #e5e7eb',
+                                                borderRadius: '10px',
+                                                color: '#374151',
+                                                fontWeight: '600',
+                                                fontSize: '0.9rem',
+                                                cursor: 'pointer',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                gap: '0.5rem',
+                                                transition: 'all 0.2s',
+                                                marginTop: 'auto'
+                                            }}
+                                            onMouseEnter={(e) => e.currentTarget.style.background = '#f3f4f6'}
+                                            onMouseLeave={(e) => e.currentTarget.style.background = '#f9fafb'}
+                                        >
+                                            <Eye size={18} />
+                                            Preview Document
+                                        </button>
                                     )}
                                 </div>
                             </div>
                         </div>
-
                     </div>
                 )}
             </main>
 
             {/* Preview Modal */}
-            {showPreviewModal && uploadedDoc && previewUrl && (
-                <div
-                    style={{
+            {
+                showPreviewModal && uploadedDoc && previewUrl && (
+                    <div
+                        style={{
+                            position: 'fixed',
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            background: 'rgba(0, 0, 0, 0.85)',
+                            zIndex: 9999,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            padding: '2rem'
+                        }}
+                        onClick={() => setShowPreviewModal(false)}
+                    >
+                        <div
+                            style={{
+                                background: 'white',
+                                borderRadius: '16px',
+                                maxWidth: '1200px',
+                                width: '100%',
+                                maxHeight: '90vh',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                overflow: 'hidden'
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            {/* Modal Header */}
+                            <div style={{
+                                padding: '1.5rem',
+                                borderBottom: '1px solid #e5e7eb',
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center'
+                            }}>
+                                <div>
+                                    <h3 style={{ fontSize: '1.25rem', fontWeight: '700', color: '#111827', marginBottom: '0.25rem' }}>
+                                        {uploadedDoc.name}
+                                    </h3>
+                                    <p style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+                                        {uploadedDoc.size} • {uploadedDoc.type}
+                                    </p>
+                                </div>
+                                <button
+                                    onClick={() => setShowPreviewModal(false)}
+                                    style={{
+                                        width: '40px',
+                                        height: '40px',
+                                        borderRadius: '8px',
+                                        border: '1px solid #e5e7eb',
+                                        background: 'white',
+                                        cursor: 'pointer',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        color: '#6b7280',
+                                        fontSize: '1.5rem'
+                                    }}
+                                >
+                                    ×
+                                </button>
+                            </div>
+
+                            {/* Modal Content */}
+                            <div style={{
+                                flex: 1,
+                                overflow: 'auto',
+                                padding: '1.5rem',
+                                background: '#f9fafb',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center'
+                            }}>
+                                {uploadedDoc.type.startsWith('image/') ? (
+                                    <img
+                                        src={previewUrl}
+                                        alt={uploadedDoc.name}
+                                        style={{
+                                            maxWidth: '100%',
+                                            maxHeight: '100%',
+                                            objectFit: 'contain',
+                                            borderRadius: '8px'
+                                        }}
+                                    />
+                                ) : uploadedDoc.type === 'application/pdf' ? (
+                                    <iframe
+                                        src={previewUrl}
+                                        style={{
+                                            width: '100%',
+                                            height: '600px',
+                                            border: 'none',
+                                            borderRadius: '8px',
+                                            background: 'white'
+                                        }}
+                                        title="PDF Preview"
+                                    />
+                                ) : uploadedDoc.type === 'text/plain' ? (
+                                    <iframe
+                                        src={previewUrl}
+                                        style={{
+                                            width: '100%',
+                                            height: '600px',
+                                            border: 'none',
+                                            borderRadius: '8px',
+                                            background: 'white',
+                                            padding: '1rem'
+                                        }}
+                                        title="Text Preview"
+                                    />
+                                ) : (
+                                    <div style={{ textAlign: 'center', padding: '3rem', color: '#6b7280' }}>
+                                        <FileText size={80} color="#9ca3af" style={{ marginBottom: '1.5rem' }} />
+                                        <h4 style={{ fontSize: '1.125rem', fontWeight: '600', marginBottom: '0.5rem', color: '#374151' }}>
+                                            Preview not available
+                                        </h4>
+                                        <p style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+                                            This file type cannot be previewed in the browser
+                                        </p>
+                                        <p style={{ fontSize: '0.75rem', marginTop: '0.5rem', color: '#9ca3af' }}>
+                                            {uploadedDoc.type || 'Unknown type'}
+                                        </p>
+                                        <a
+                                            href={uploadedDoc.link}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            style={{
+                                                display: 'inline-block',
+                                                marginTop: '1.5rem',
+                                                padding: '0.75rem 1.5rem',
+                                                background: '#4f46e5',
+                                                color: 'white',
+                                                borderRadius: '8px',
+                                                textDecoration: 'none',
+                                                fontWeight: '600',
+                                                fontSize: '0.875rem'
+                                            }}
+                                        >
+                                            Open in New Tab
+                                        </a>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                )
+            }
+
+            {/* Signature Field Editor Modal */}
+            {
+                showFieldEditor && selectedFile && (
+                    <SignatureFieldEditor
+                        file={selectedFile}
+                        signers={signers}
+                        onSave={(fields) => {
+                            setSignatureFields(fields);
+                            setShowFieldEditor(false);
+                            // Now upload the document with e-signature
+                            handleUpload();
+                        }}
+                        onClose={() => setShowFieldEditor(false)}
+                    />
+                )
+            }
+
+            {/* Signing Links Display (shown after successful upload with e-signature) */}
+            {
+                signingLinks.length > 0 && uploadedDoc && (
+                    <div style={{
                         position: 'fixed',
                         top: 0,
                         left: 0,
                         right: 0,
                         bottom: 0,
-                        background: 'rgba(0, 0, 0, 0.85)',
-                        zIndex: 9999,
+                        background: 'rgba(0, 0, 0, 0.75)',
+                        zIndex: 10000,
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
                         padding: '2rem'
                     }}
-                    onClick={() => setShowPreviewModal(false)}
-                >
-                    <div
-                        style={{
-                            background: 'white',
-                            borderRadius: '16px',
-                            maxWidth: '1200px',
-                            width: '100%',
-                            maxHeight: '90vh',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            overflow: 'hidden'
-                        }}
-                        onClick={(e) => e.stopPropagation()}
+                        onClick={() => setSigningLinks([])}
                     >
-                        {/* Modal Header */}
                         <div style={{
-                            padding: '1.5rem',
-                            borderBottom: '1px solid #e5e7eb',
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center'
-                        }}>
-                            <div>
-                                <h3 style={{ fontSize: '1.25rem', fontWeight: '700', color: '#111827', marginBottom: '0.25rem' }}>
-                                    {uploadedDoc.name}
-                                </h3>
-                                <p style={{ fontSize: '0.875rem', color: '#6b7280' }}>
-                                    {uploadedDoc.size} • {uploadedDoc.type}
-                                </p>
+                            background: 'white',
+                            borderRadius: '20px',
+                            padding: '2rem',
+                            maxWidth: '600px',
+                            width: '100%',
+                            maxHeight: '80vh',
+                            overflow: 'auto'
+                        }}
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <h2 style={{ fontSize: '1.5rem', fontWeight: '700', color: '#111827', marginBottom: '1rem' }}>
+                                🎉 E-Signature Document Created!
+                            </h2>
+                            <p style={{ color: '#6b7280', marginBottom: '2rem' }}>
+                                Share these links with signers. They will sign in the order specified.
+                            </p>
+
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                                {signingLinks.map((signer, index) => (
+                                    <div key={signer.id} style={{
+                                        padding: '1rem',
+                                        background: '#f9fafb',
+                                        border: '1px solid #e5e7eb',
+                                        borderRadius: '10px'
+                                    }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
+                                            <div style={{
+                                                width: '32px',
+                                                height: '32px',
+                                                borderRadius: '50%',
+                                                background: ['#4f46e5', '#10b981', '#f59e0b'][index % 3],
+                                                color: 'white',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                fontWeight: '600'
+                                            }}>
+                                                {signer.signing_order || (index + 1)}
+                                            </div>
+                                            <div>
+                                                <div style={{ fontWeight: '600', color: '#111827' }}>{signer.signer_name}</div>
+                                                <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>{signer.signer_email}</div>
+                                            </div>
+                                        </div>
+                                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                                            <input
+                                                type="text"
+                                                value={`${window.location.origin}/sign/${signer.signing_link}`}
+                                                readOnly
+                                                style={{
+                                                    flex: 1,
+                                                    padding: '0.5rem',
+                                                    border: '1px solid #e5e7eb',
+                                                    borderRadius: '6px',
+                                                    fontSize: '0.875rem',
+                                                    background: 'white'
+                                                }}
+                                            />
+                                            <button
+                                                onClick={() => {
+                                                    navigator.clipboard.writeText(`${window.location.origin}/sign/${signer.signing_link}`);
+                                                }}
+                                                style={{
+                                                    padding: '0.5rem 1rem',
+                                                    background: '#4f46e5',
+                                                    color: 'white',
+                                                    border: 'none',
+                                                    borderRadius: '6px',
+                                                    cursor: 'pointer',
+                                                    fontSize: '0.875rem',
+                                                    fontWeight: '500'
+                                                }}
+                                            >
+                                                Copy
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
+
                             <button
-                                onClick={() => setShowPreviewModal(false)}
+                                onClick={() => setSigningLinks([])}
                                 style={{
-                                    width: '40px',
-                                    height: '40px',
-                                    borderRadius: '8px',
-                                    border: '1px solid #e5e7eb',
-                                    background: 'white',
-                                    cursor: 'pointer',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    color: '#6b7280',
-                                    fontSize: '1.5rem'
+                                    width: '100%',
+                                    marginTop: '1.5rem',
+                                    padding: '0.75rem',
+                                    background: '#f3f4f6',
+                                    border: 'none',
+                                    borderRadius: '10px',
+                                    fontWeight: '600',
+                                    cursor: 'pointer'
                                 }}
                             >
-                                ×
+                                Close
                             </button>
                         </div>
-
-                        {/* Modal Content */}
-                        <div style={{
-                            flex: 1,
-                            overflow: 'auto',
-                            padding: '1.5rem',
-                            background: '#f9fafb',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center'
-                        }}>
-                            {uploadedDoc.type.startsWith('image/') ? (
-                                <img
-                                    src={previewUrl}
-                                    alt={uploadedDoc.name}
-                                    style={{
-                                        maxWidth: '100%',
-                                        maxHeight: '100%',
-                                        objectFit: 'contain',
-                                        borderRadius: '8px'
-                                    }}
-                                />
-                            ) : uploadedDoc.type === 'application/pdf' ? (
-                                <iframe
-                                    src={previewUrl}
-                                    style={{
-                                        width: '100%',
-                                        height: '600px',
-                                        border: 'none',
-                                        borderRadius: '8px',
-                                        background: 'white'
-                                    }}
-                                    title="PDF Preview"
-                                />
-                            ) : uploadedDoc.type === 'text/plain' ? (
-                                <iframe
-                                    src={previewUrl}
-                                    style={{
-                                        width: '100%',
-                                        height: '600px',
-                                        border: 'none',
-                                        borderRadius: '8px',
-                                        background: 'white',
-                                        padding: '1rem'
-                                    }}
-                                    title="Text Preview"
-                                />
-                            ) : (
-                                <div style={{ textAlign: 'center', padding: '3rem', color: '#6b7280' }}>
-                                    <FileText size={80} color="#9ca3af" style={{ marginBottom: '1.5rem' }} />
-                                    <h4 style={{ fontSize: '1.125rem', fontWeight: '600', marginBottom: '0.5rem', color: '#374151' }}>
-                                        Preview not available
-                                    </h4>
-                                    <p style={{ fontSize: '0.875rem', color: '#6b7280' }}>
-                                        This file type cannot be previewed in the browser
-                                    </p>
-                                    <p style={{ fontSize: '0.75rem', marginTop: '0.5rem', color: '#9ca3af' }}>
-                                        {uploadedDoc.type || 'Unknown type'}
-                                    </p>
-                                    <a
-                                        href={uploadedDoc.link}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        style={{
-                                            display: 'inline-block',
-                                            marginTop: '1.5rem',
-                                            padding: '0.75rem 1.5rem',
-                                            background: '#4f46e5',
-                                            color: 'white',
-                                            borderRadius: '8px',
-                                            textDecoration: 'none',
-                                            fontWeight: '600',
-                                            fontSize: '0.875rem'
-                                        }}
-                                    >
-                                        Open in New Tab
-                                    </a>
-                                </div>
-                            )}
-                        </div>
                     </div>
-                </div>
-            )}
-        </div>
+                )
+            }
+        </div >
     );
 };
 
