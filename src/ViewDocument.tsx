@@ -6,6 +6,8 @@ import { comparePassword, rateLimiter } from './lib/security';
 import { FileText, Download, Shield, AlertCircle, Lock as LockIcon, Mail } from 'lucide-react';
 import { logDocumentView, logDocumentDownload, logPasswordVerification, logEmailVerification } from './lib/auditLogger';
 import WatermarkOverlay from './components/WatermarkOverlay';
+import BiometricGate from './components/BiometricGate';
+import WebcamGate from './components/WebcamGate';
 
 interface DocumentData {
     id: string;
@@ -34,6 +36,9 @@ interface DocumentData {
         rotation: number;
         layout: 'single' | 'tiled';
     };
+    require_biometric: boolean;
+    require_snapshot: boolean;
+    biometric_credential_id?: string;
 }
 
 const ViewDocument: React.FC = () => {
@@ -51,6 +56,11 @@ const ViewDocument: React.FC = () => {
     const [sentCode, setSentCode] = useState<string | null>(null);
     const [isEmailVerified, setIsEmailVerified] = useState(false);
     const [showCodeInput, setShowCodeInput] = useState(false);
+
+    // Biometric/Snapshot State
+    const [isBiometricVerified, setIsBiometricVerified] = useState(false);
+    const [isSnapshotVerified, setIsSnapshotVerified] = useState(false);
+    const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
 
     // Branding State
     const [branding, setBranding] = useState<{
@@ -149,6 +159,10 @@ const ViewDocument: React.FC = () => {
                 })
                 .select('session_id') // Correct column name
                 .single();
+
+            if (sessionData) {
+                setCurrentSessionId(sessionData.session_id);
+            }
 
             if (sessionError) {
                 console.error('Session creation failed:', sessionError);
@@ -251,6 +265,26 @@ const ViewDocument: React.FC = () => {
         }
     };
 
+    const handleBiometricSuccess = async () => {
+        setIsBiometricVerified(true);
+        if (currentSessionId) {
+            await supabase
+                .from('document_access_sessions')
+                .update({ verified_biometric: true })
+                .eq('session_id', currentSessionId);
+        }
+    };
+
+    const handleSnapshotSuccess = async (url: string) => {
+        setIsSnapshotVerified(true);
+        if (currentSessionId) {
+            await supabase
+                .from('document_access_sessions')
+                .update({ snapshot_url: url })
+                .eq('session_id', currentSessionId);
+        }
+    };
+
     const handleDownload = async () => {
         if (!document) return;
         setDownloading(true);
@@ -334,7 +368,9 @@ const ViewDocument: React.FC = () => {
     // Determine what to show
     const showPasswordScreen = document.password && !isAuthenticated;
     const showEmailScreen = document.email_verification && !isEmailVerified && !showPasswordScreen;
-    const showContent = !showPasswordScreen && !showEmailScreen;
+    const showBiometricScreen = document.require_biometric && !isBiometricVerified && !showPasswordScreen && !showEmailScreen;
+    const showSnapshotScreen = document.require_snapshot && !isSnapshotVerified && !showPasswordScreen && !showEmailScreen && !showBiometricScreen;
+    const showContent = !showPasswordScreen && !showEmailScreen && !showBiometricScreen && !showSnapshotScreen;
 
     return (
         <div
@@ -498,6 +534,21 @@ const ViewDocument: React.FC = () => {
                                 </form>
                             )}
                         </div>
+                    )}
+
+                    {showBiometricScreen && (
+                        <BiometricGate
+                            documentName={document.name}
+                            credentialId={document.biometric_credential_id}
+                            onVerified={handleBiometricSuccess}
+                        />
+                    )}
+
+                    {showSnapshotScreen && (
+                        <WebcamGate
+                            documentName={document.name}
+                            onVerified={handleSnapshotSuccess}
+                        />
                     )}
 
                     {showContent && (

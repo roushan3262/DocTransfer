@@ -16,7 +16,9 @@ import {
     Mail,
     Image as ImageIcon,
     PenTool,
-    UserPlus
+    UserPlus,
+    Fingerprint,
+    Camera
 } from 'lucide-react';
 import { supabase } from './lib/supabase';
 import { encryptFile } from './lib/crypto';
@@ -29,6 +31,7 @@ import SignerManagement, { type Signer } from './components/SignerManagement';
 import SignatureFieldEditor, { type SignatureField } from './components/SignatureFieldEditor';
 import { setupDocumentESignature } from './lib/esignature';
 import { logDocumentUpload, logLinkCopy } from './lib/auditLogger';
+import { registerBiometric, isBiometricAvailable } from './lib/webauthn';
 
 interface Document {
     id: string;
@@ -91,6 +94,12 @@ const DataRoom: React.FC = () => {
         layout: 'tiled'
     });
     const [requestSignature, setRequestSignature] = useState(false);
+
+    // New Biometric/Snapshot State
+    const [requireBiometric, setRequireBiometric] = useState(false);
+    const [requireSnapshot, setRequireSnapshot] = useState(false);
+    const [biometricCredentialId, setBiometricCredentialId] = useState<string | null>(null);
+    const [biometricRegistering, setBiometricRegistering] = useState(false);
 
     // E-Signature State
     const [signers, setSigners] = useState<Signer[]>([]);
@@ -188,6 +197,45 @@ const DataRoom: React.FC = () => {
         setFilePreview(null); // Will be set by useEffect
     };
 
+    const handleBiometricToggle = async (enabled: boolean) => {
+        if (!enabled) {
+            // User is disabling biometric protection
+            setRequireBiometric(false);
+            setBiometricCredentialId(null);
+            return;
+        }
+
+        // User is enabling biometric protection - register immediately
+        setBiometricRegistering(true);
+        setUploadError(null);
+
+        try {
+            // Check availability first
+            const available = await isBiometricAvailable();
+            if (!available) {
+                setUploadError('Biometric authentication is not available on this device. Please ensure you have Touch ID, Face ID, or Windows Hello enabled.');
+                return;
+            }
+
+            // Trigger registration
+            const result = await registerBiometric();
+
+            if (result.success && result.credentialId) {
+                setRequireBiometric(true);
+                setBiometricCredentialId(result.credentialId);
+                // Optional: Show success feedback
+                console.log('✓ Biometric registered successfully');
+            } else {
+                setUploadError(result.error || 'Failed to register biometric');
+            }
+        } catch (error: any) {
+            console.error('Biometric registration error:', error);
+            setUploadError('Failed to register biometric. Please try again.');
+        } finally {
+            setBiometricRegistering(false);
+        }
+    };
+
     const handleUpload = async () => {
         if (!selectedFile) return;
 
@@ -197,6 +245,11 @@ const DataRoom: React.FC = () => {
         try {
             console.log('=== UPLOAD DEBUG START ===');
             console.log('Selected file:', selectedFile.name, selectedFile.size, 'bytes');
+
+            // Validate biometric requirement
+            if (requireBiometric && !biometricCredentialId) {
+                throw new Error('Biometric protection is enabled but registration was not completed. Please toggle biometric protection again.');
+            }
 
             // 1. Encrypt file before upload
             let encryptedBlob, key, iv;
@@ -259,6 +312,9 @@ const DataRoom: React.FC = () => {
                     allowed_email: emailVerification ? allowedEmail : null,
                     apply_watermark: applyWatermark,
                     watermark_config: applyWatermark ? watermarkConfig : null,
+                    require_biometric: requireBiometric,
+                    require_snapshot: requireSnapshot,
+                    biometric_credential_id: requireBiometric ? biometricCredentialId : null,
                     // Encryption metadata
                     encryption_key: key,
                     encryption_iv: iv,
@@ -301,7 +357,9 @@ const DataRoom: React.FC = () => {
                     passwordProtected: passwordProtection,
                     expirationSet: linkExpiration,
                     downloadsAllowed: allowDownloads,
-                    signatureRequired: requestSignature
+                    signatureRequired: requestSignature,
+                    biometricRequired: requireBiometric,
+                    snapshotRequired: requireSnapshot
                 }
             });
 
@@ -704,6 +762,53 @@ const DataRoom: React.FC = () => {
                                                 }}
                                             />
                                         )}
+
+                                    </div>
+
+                                    {/* Biometric & Snapshot Gates */}
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1rem', background: '#f0fdf4', borderRadius: '12px', border: '1px solid #bbf7d0' }}>
+                                        <div style={{ paddingBottom: '0.5rem', borderBottom: '1px solid #dcfce7', fontSize: '0.85rem', fontWeight: '600', color: '#166534' }}>
+                                            SECURITY GATES
+                                        </div>
+
+                                        {/* Biometric Toggle */}
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                                <Fingerprint size={18} style={{ color: '#15803d' }} />
+                                                <div>
+                                                    <span style={{ fontSize: '0.95rem', fontWeight: '500', color: '#166534', display: 'block' }}>
+                                                        Require Biometrics
+                                                        {biometricRegistering && <span style={{ marginLeft: '0.5rem', fontSize: '0.75rem', color: '#ca8a04' }}>(Registering...)</span>}
+                                                        {requireBiometric && biometricCredentialId && <span style={{ marginLeft: '0.5rem', fontSize: '0.75rem', color: '#16a34a' }}>✓</span>}
+                                                    </span>
+                                                    <span style={{ fontSize: '0.75rem', color: '#15803d' }}>FaceID / TouchID / Windows Hello</span>
+                                                </div>
+                                            </div>
+                                            <label className="toggle-switch">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={requireBiometric}
+                                                    onChange={(e) => handleBiometricToggle(e.target.checked)}
+                                                    disabled={biometricRegistering}
+                                                />
+                                                <span className="toggle-slider"></span>
+                                            </label>
+                                        </div>
+
+                                        {/* Snapshot Toggle */}
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                                <Camera size={18} style={{ color: '#15803d' }} />
+                                                <div>
+                                                    <span style={{ fontSize: '0.95rem', fontWeight: '500', color: '#166534', display: 'block' }}>Require Webcam Snapshot</span>
+                                                    <span style={{ fontSize: '0.75rem', color: '#15803d' }}>Capture photo before access</span>
+                                                </div>
+                                            </div>
+                                            <label className="toggle-switch">
+                                                <input type="checkbox" checked={requireSnapshot} onChange={(e) => setRequireSnapshot(e.target.checked)} />
+                                                <span className="toggle-slider"></span>
+                                            </label>
+                                        </div>
                                     </div>
 
                                     {/* Watermark */}

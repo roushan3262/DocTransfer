@@ -224,7 +224,7 @@ export function fingerprintsMatch(fp1: string, fp2: string, tolerance: number = 
     const fp2Parts = fp2.split('||');
 
     let matches = 0;
-    const totalParts = Math.max(fp1Parts.length, fp2 Parts.length);
+    const totalParts = Math.max(fp1Parts.length, fp2Parts.length);
 
     for (let i = 0; i < Math.min(fp1Parts.length, fp2Parts.length); i++) {
         if (fp1Parts[i] === fp2Parts[i]) {
