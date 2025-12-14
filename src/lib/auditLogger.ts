@@ -338,3 +338,56 @@ export async function logExportEvent(
         }
     });
 }
+/**
+ * Fetch audit logs for a specific document or all documents
+ */
+export async function fetchAuditLogs(
+    documentId?: string | string[],
+    filters?: {
+        limit?: number;
+        offset?: number;
+        eventType?: string;
+    }
+): Promise<{ data: any[]; count: number; error?: string }> {
+    try {
+        let query = supabase
+            .from('recent_audit_activity')
+            .select('*', { count: 'exact' });
+
+        if (documentId) {
+            if (Array.isArray(documentId)) {
+                if (documentId.length > 0) {
+                    query = query.in('document_id', documentId);
+                } else {
+                    // If empty array passed, return nothing (no documents to show logs for)
+                    return { data: [], count: 0 };
+                }
+            } else {
+                query = query.eq('document_id', documentId);
+            }
+        }
+
+        if (filters?.eventType) {
+            query = query.eq('event_type', filters.eventType);
+        }
+
+        query = query
+            .order('event_timestamp', { ascending: false })
+            .range(
+                filters?.offset || 0,
+                (filters?.offset || 0) + (filters?.limit || 50) - 1
+            );
+
+        const { data, count, error } = await query;
+
+        if (error) {
+            console.error('Error fetching audit logs:', error);
+            return { data: [], count: 0, error: error.message };
+        }
+
+        return { data: data || [], count: count || 0 };
+    } catch (error) {
+        console.error('Exception fetching audit logs:', error);
+        return { data: [], count: 0, error: String(error) };
+    }
+}

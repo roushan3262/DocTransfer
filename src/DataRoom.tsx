@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useUser } from '@clerk/clerk-react';
 import {
     Upload,
     FileText,
@@ -23,6 +24,7 @@ import { hashPassword } from './lib/security';
 import GoogleDriveTab from './components/GoogleDriveTab';
 import AnalyticsDashboard from './components/analytics/AnalyticsDashboard';
 import DashboardAnimation from './components/DashboardAnimation';
+import AuditTrail from './components/AuditTrail';
 import SignerManagement, { type Signer } from './components/SignerManagement';
 import SignatureFieldEditor, { type SignatureField } from './components/SignatureFieldEditor';
 import { setupDocumentESignature } from './lib/esignature';
@@ -42,12 +44,23 @@ interface Document {
         allowDownload: boolean;
         customDomain: string;
     };
+    watermark_config?: WatermarkConfig;
+}
+
+interface WatermarkConfig {
+    text: string;
+    color: string;
+    opacity: number;
+    fontSize: number;
+    rotation: number;
+    layout: 'single' | 'tiled';
 }
 
 const DataRoom: React.FC = () => {
+    const { user } = useUser();
     const [documents, setDocuments] = useState<Document[]>([]);
     const [isDragging, setIsDragging] = useState(false);
-    const [activeTab, setActiveTab] = useState<'upload' | 'google-drive' | 'documents' | 'analytics'>('upload');
+    const [activeTab, setActiveTab] = useState<'upload' | 'google-drive' | 'documents' | 'analytics' | 'audit'>('upload');
     const [selectedDocumentId, setSelectedDocumentId] = useState<string | undefined>(undefined);
 
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -69,6 +82,14 @@ const DataRoom: React.FC = () => {
     const [emailVerification, setEmailVerification] = useState(false);
     const [allowedEmail, setAllowedEmail] = useState('');
     const [applyWatermark, setApplyWatermark] = useState(false);
+    const [watermarkConfig, setWatermarkConfig] = useState<WatermarkConfig>({
+        text: 'CONFIDENTIAL {{email}}',
+        color: '#000000',
+        opacity: 0.3,
+        fontSize: 24,
+        rotation: -45,
+        layout: 'tiled'
+    });
     const [requestSignature, setRequestSignature] = useState(false);
 
     // E-Signature State
@@ -101,10 +122,17 @@ const DataRoom: React.FC = () => {
 
     const fetchDocuments = async () => {
         try {
-            const { data, error } = await supabase
+            let query = supabase
                 .from('documents')
                 .select('*')
                 .order('created_at', { ascending: false });
+
+            // Filter by user if authenticated
+            if (user) {
+                query = query.eq('user_id', user.id);
+            }
+
+            const { data, error } = await query;
 
             if (error) throw error;
 
@@ -229,13 +257,15 @@ const DataRoom: React.FC = () => {
                     screenshot_protection: screenshotProtection,
                     email_verification: emailVerification,
                     allowed_email: emailVerification ? allowedEmail : null,
+                    apply_watermark: applyWatermark,
+                    watermark_config: applyWatermark ? watermarkConfig : null,
                     // Encryption metadata
                     encryption_key: key,
                     encryption_iv: iv,
                     is_encrypted: true,
                     original_file_name: selectedFile.name,
                     original_file_type: selectedFile.type,
-                    user_id: null // No authentication - documents are not associated with users
+                    user_id: user?.id || null // Store authenticated user ID
                 })
                 .select()
                 .single();
@@ -378,6 +408,9 @@ const DataRoom: React.FC = () => {
                         <button onClick={() => setActiveTab('analytics')} style={{ padding: '0.625rem 1.5rem', background: activeTab === 'analytics' ? '#8b5cf6' : 'transparent', color: activeTab === 'analytics' ? 'white' : '#6b7280', border: 'none', borderRadius: '8px', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', transition: 'all 0.2s' }}>
                             <BarChart2 size={16} /> Analytics
                         </button>
+                        <button onClick={() => setActiveTab('audit')} style={{ padding: '0.625rem 1.5rem', background: activeTab === 'audit' ? '#8b5cf6' : 'transparent', color: activeTab === 'audit' ? 'white' : '#6b7280', border: 'none', borderRadius: '8px', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', transition: 'all 0.2s' }}>
+                            <Shield size={16} /> Audit Trail
+                        </button>
                     </div>
                 </div>
             </header>
@@ -388,6 +421,10 @@ const DataRoom: React.FC = () => {
                     <GoogleDriveTab onDocumentUploaded={fetchDocuments} />
                 ) : activeTab === 'analytics' ? (
                     <AnalyticsDashboard documentId={selectedDocumentId} />
+                ) : activeTab === 'audit' ? (
+                    <div className="animate-fade-in">
+                        <AuditTrail documentId={selectedDocumentId || documents.map(d => d.id)} />
+                    </div>
                 ) : activeTab === 'documents' ? (
                     <div className="animate-fade-in">
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
@@ -460,6 +497,17 @@ const DataRoom: React.FC = () => {
                                                 style={{ flex: 1, padding: '0.5rem', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '6px', color: '#166534', fontSize: '0.875rem', fontWeight: '500', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.25rem' }}
                                             >
                                                 <BarChart2 size={16} /> Analytics
+                                            </button>
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setSelectedDocumentId(doc.id);
+                                                    setActiveTab('audit');
+                                                }}
+                                                style={{ padding: '0.5rem', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '6px', color: '#0369a1', fontSize: '0.875rem', fontWeight: '500', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.25rem' }}
+                                                title="View Audit Trail"
+                                            >
+                                                <Shield size={16} />
                                             </button>
                                         </div>
                                     </div>
@@ -659,15 +707,151 @@ const DataRoom: React.FC = () => {
                                     </div>
 
                                     {/* Watermark */}
-                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                                            <ImageIcon size={18} style={{ color: '#6b7280' }} />
-                                            <span style={{ fontSize: '0.95rem', fontWeight: '500', color: '#374151' }}>Apply Watermark</span>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                                <ImageIcon size={18} style={{ color: '#6b7280' }} />
+                                                <span style={{ fontSize: '0.95rem', fontWeight: '500', color: '#374151' }}>Apply Dynamic Watermark</span>
+                                            </div>
+                                            <label className="toggle-switch">
+                                                <input type="checkbox" checked={applyWatermark} onChange={(e) => setApplyWatermark(e.target.checked)} />
+                                                <span className="toggle-slider"></span>
+                                            </label>
                                         </div>
-                                        <label className="toggle-switch">
-                                            <input type="checkbox" checked={applyWatermark} onChange={(e) => setApplyWatermark(e.target.checked)} />
-                                            <span className="toggle-slider"></span>
-                                        </label>
+                                        {applyWatermark && (
+                                            <div style={{ marginLeft: '2rem', marginTop: '0.5rem', padding: '1rem', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                                                {/* Text Template */}
+                                                <div style={{ marginBottom: '1rem' }}>
+                                                    <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: '500', color: '#64748b', marginBottom: '0.25rem' }}>Watermark Text</label>
+                                                    <input
+                                                        type="text"
+                                                        value={watermarkConfig.text}
+                                                        onChange={(e) => setWatermarkConfig({ ...watermarkConfig, text: e.target.value })}
+                                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid #cbd5e1', borderRadius: '4px', fontSize: '0.9rem' }}
+                                                    />
+                                                    <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+                                                        {['{{email}}', '{{ip}}', '{{date}}'].map(tag => (
+                                                            <button
+                                                                key={tag}
+                                                                onClick={() => setWatermarkConfig(prev => ({ ...prev, text: prev.text + ' ' + tag }))}
+                                                                style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem', background: '#e0e7ff', color: '#4338ca', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                                                            >
+                                                                + {tag}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+
+                                                {/* Settings Grid */}
+                                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                                    <div>
+                                                        <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: '500', color: '#64748b' }}>Color</label>
+                                                        <input
+                                                            type="color"
+                                                            value={watermarkConfig.color}
+                                                            onChange={(e) => setWatermarkConfig({ ...watermarkConfig, color: e.target.value })}
+                                                            style={{ width: '100%', height: '36px', border: 'none', cursor: 'pointer' }}
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: '500', color: '#64748b' }}>Opacity ({watermarkConfig.opacity})</label>
+                                                        <input
+                                                            type="range"
+                                                            min="0.1" max="1" step="0.1"
+                                                            value={watermarkConfig.opacity}
+                                                            onChange={(e) => setWatermarkConfig({ ...watermarkConfig, opacity: parseFloat(e.target.value) })}
+                                                            style={{ width: '100%' }}
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: '500', color: '#64748b' }}>Size ({watermarkConfig.fontSize}px)</label>
+                                                        <input
+                                                            type="range"
+                                                            min="12" max="72" step="2"
+                                                            value={watermarkConfig.fontSize}
+                                                            onChange={(e) => setWatermarkConfig({ ...watermarkConfig, fontSize: parseInt(e.target.value) })}
+                                                            style={{ width: '100%' }}
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: '500', color: '#64748b' }}>Rotation ({watermarkConfig.rotation}°)</label>
+                                                        <input
+                                                            type="range"
+                                                            min="-90" max="90" step="5"
+                                                            value={watermarkConfig.rotation}
+                                                            onChange={(e) => setWatermarkConfig({ ...watermarkConfig, rotation: parseInt(e.target.value) })}
+                                                            style={{ width: '100%' }}
+                                                        />
+                                                    </div>
+                                                </div>
+
+                                                {/* Layout Toggle */}
+                                                <div style={{ marginTop: '1rem' }}>
+                                                    <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: '500', color: '#64748b', marginBottom: '0.25rem' }}>Layout</label>
+                                                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                                        <button
+                                                            onClick={() => setWatermarkConfig({ ...watermarkConfig, layout: 'single' })}
+                                                            style={{
+                                                                flex: 1, padding: '0.5rem',
+                                                                background: watermarkConfig.layout === 'single' ? '#3b82f6' : 'white',
+                                                                color: watermarkConfig.layout === 'single' ? 'white' : '#64748b',
+                                                                border: '1px solid #cbd5e1', borderRadius: '4px', cursor: 'pointer'
+                                                            }}
+                                                        >
+                                                            Single
+                                                        </button>
+                                                        <button
+                                                            onClick={() => setWatermarkConfig({ ...watermarkConfig, layout: 'tiled' })}
+                                                            style={{
+                                                                flex: 1, padding: '0.5rem',
+                                                                background: watermarkConfig.layout === 'tiled' ? '#3b82f6' : 'white',
+                                                                color: watermarkConfig.layout === 'tiled' ? 'white' : '#64748b',
+                                                                border: '1px solid #cbd5e1', borderRadius: '4px', cursor: 'pointer'
+                                                            }}
+                                                        >
+                                                            Tiled
+                                                        </button>
+                                                    </div>
+                                                </div>
+
+                                                {/* Live Preview */}
+                                                <div style={{
+                                                    marginTop: '1rem',
+                                                    height: '150px',
+                                                    background: 'white',
+                                                    border: '1px dashed #cbd5e1',
+                                                    position: 'relative',
+                                                    overflow: 'hidden',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center'
+                                                }}>
+                                                    <div style={{
+                                                        position: 'absolute',
+                                                        inset: 0,
+                                                        display: 'flex',
+                                                        flexWrap: 'wrap',
+                                                        alignItems: 'center',
+                                                        justifyContent: 'center',
+                                                        transform: `rotate(${watermarkConfig.rotation}deg)`,
+                                                        pointerEvents: 'none'
+                                                    }}>
+                                                        {[...Array(watermarkConfig.layout === 'tiled' ? 6 : 1)].map((_, i) => (
+                                                            <span key={i} style={{
+                                                                color: watermarkConfig.color,
+                                                                opacity: watermarkConfig.opacity,
+                                                                fontSize: `${watermarkConfig.fontSize}px`,
+                                                                margin: '20px',
+                                                                whiteSpace: 'nowrap'
+                                                            }}>
+                                                                {watermarkConfig.text}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                    <span style={{ position: 'relative', zIndex: -1, color: '#94a3b8', fontSize: '0.8rem' }}>Document Content Preview</span>
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
 
                                     {/* E-Signature */}

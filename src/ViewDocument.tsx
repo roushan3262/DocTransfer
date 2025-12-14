@@ -4,6 +4,8 @@ import { supabase } from './lib/supabase';
 import { decryptFile } from './lib/crypto';
 import { comparePassword, rateLimiter } from './lib/security';
 import { FileText, Download, Shield, AlertCircle, Lock as LockIcon, Mail } from 'lucide-react';
+import { logDocumentView, logDocumentDownload, logPasswordVerification, logEmailVerification } from './lib/auditLogger';
+import WatermarkOverlay from './components/WatermarkOverlay';
 
 interface DocumentData {
     id: string;
@@ -24,6 +26,14 @@ interface DocumentData {
     encryption_key?: string;
     encryption_iv?: string;
     original_file_type?: string;
+    watermark_config?: {
+        text: string;
+        color: string;
+        opacity: number;
+        fontSize: number;
+        rotation: number;
+        layout: 'single' | 'tiled';
+    };
 }
 
 const ViewDocument: React.FC = () => {
@@ -77,6 +87,12 @@ const ViewDocument: React.FC = () => {
 
             // Track View
             trackView(data.id);
+            // Log to new audit system
+            logDocumentView(data.id, {
+                metadata: {
+                    viewer_agent: navigator.userAgent
+                }
+            });
 
             // Check for expiration
             if (data.expires_at) {
@@ -186,7 +202,9 @@ const ViewDocument: React.FC = () => {
         e.preventDefault();
         if (document?.password && await comparePassword(passwordInput, document.password)) {
             setIsAuthenticated(true);
+            await logPasswordVerification(document.id, true);
         } else {
+            if (document) await logPasswordVerification(document.id, false);
             alert('Incorrect password');
         }
     };
@@ -226,7 +244,9 @@ const ViewDocument: React.FC = () => {
         e.preventDefault();
         if (verificationCode === sentCode) {
             setIsEmailVerified(true);
+            if (document) logEmailVerification(document.id, email, true);
         } else {
+            if (document) logEmailVerification(document.id, email, false);
             alert('Invalid code');
         }
     };
@@ -281,6 +301,12 @@ const ViewDocument: React.FC = () => {
             console.error('Download error:', err);
             alert('Failed to download file.');
         } finally {
+            if (document) {
+                logDocumentDownload(document.id, {
+                    userEmail: email || undefined,
+                    metadata: { storageType: document.storage_type }
+                });
+            }
             setDownloading(false);
         }
     };
@@ -339,6 +365,19 @@ const ViewDocument: React.FC = () => {
                     zIndex: 9999,
                     backgroundImage: 'url("data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' version=\'1.1\' height=\'100px\' width=\'100px\'><text transform=\'translate(20, 100) rotate(-45)\' fill=\'rgba(0,0,0,0.05)\' font-size=\'20\'>Protected View</text></svg>")'
                 }} />
+            )}
+
+            {document.watermark_config && (
+                <div style={{ position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 50 }}>
+                    <WatermarkOverlay
+                        config={document.watermark_config}
+                        viewerInfo={{
+                            email: isEmailVerified ? email : undefined,
+                            ip: '127.0.0.1', // Ideally fetched from edge
+                            date: new Date().toLocaleString()
+                        }}
+                    />
+                </div>
             )}
 
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', maxWidth: '480px' }}>

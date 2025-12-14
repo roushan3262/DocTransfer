@@ -12,6 +12,7 @@ import {
     PenTool,
     Loader2
 } from 'lucide-react';
+import { logAuditEvent } from './lib/auditLogger';
 import SignatureCanvasComponent from './components/SignatureCanvas';
 
 // Set worker source
@@ -99,6 +100,15 @@ const SignDocument: React.FC = () => {
                         .from('document_signers')
                         .update({ status: 'viewed', viewed_at: new Date().toISOString() })
                         .eq('id', signerData.id);
+
+                    // Log audit event for signer viewing
+                    logAuditEvent({
+                        eventType: 'document_viewed',
+                        documentId: doc.id,
+                        signerId: signerData.id,
+                        userEmail: signerData.signer_email,
+                        metadata: { source: 'signing_link' }
+                    });
                 }
 
                 // 3. Get Signature Fields
@@ -281,6 +291,18 @@ const SignDocument: React.FC = () => {
                 .eq('id', signer.id);
 
             if (error) throw error;
+
+            // Log audit event for signing
+            await logAuditEvent({
+                eventType: 'document_signed',
+                documentId: documentData.id,
+                signerId: signer.id,
+                userEmail: signer.signer_email,
+                metadata: {
+                    ip_address: 'client', // Will be captured by logger
+                    workflow_status: 'completed'
+                }
+            });
 
             setSuccess(true);
         } catch (err: any) {
