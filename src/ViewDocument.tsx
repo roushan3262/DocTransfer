@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom';
 import { supabase } from './lib/supabase';
 import { decryptFile } from './lib/crypto';
 import { comparePassword, rateLimiter } from './lib/security';
-import { FileText, Download, Shield, AlertCircle, Lock as LockIcon, Mail } from 'lucide-react';
+import { FileText, Download, Shield, AlertCircle, Lock as LockIcon, Mail, Flame } from 'lucide-react';
 import { logDocumentView, logDocumentDownload, logPasswordVerification, logEmailVerification } from './lib/auditLogger';
 import WatermarkOverlay from './components/WatermarkOverlay';
 import BiometricGate from './components/BiometricGate';
@@ -27,6 +27,7 @@ interface DocumentData {
     is_encrypted?: boolean;
     encryption_key?: string;
     encryption_iv?: string;
+    is_vault_file?: boolean; // New field
     original_file_type?: string;
     watermark_config?: {
         text: string;
@@ -39,6 +40,10 @@ interface DocumentData {
     require_biometric: boolean;
     require_snapshot: boolean;
     biometric_credential_id?: string;
+    scan_status?: 'pending' | 'clean' | 'infected' | 'error';
+    max_views?: number;
+    view_count?: number;
+    burn_after_reading?: boolean;
 }
 
 const ViewDocument: React.FC = () => {
@@ -61,6 +66,22 @@ const ViewDocument: React.FC = () => {
     const [isBiometricVerified, setIsBiometricVerified] = useState(false);
     const [isSnapshotVerified, setIsSnapshotVerified] = useState(false);
     const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+
+    // Vault State
+    const [vaultKey, setVaultKey] = useState<string | null>(null);
+
+    useEffect(() => {
+        // Extract key from hash if present (Magic Link)
+        const hash = window.location.hash;
+        if (hash.includes('key=')) {
+            const params = new URLSearchParams(hash.substring(1)); // remove #
+            const key = params.get('key');
+            if (key) {
+                setVaultKey(decodeURIComponent(key));
+                console.log('🔑 Vault Key found in URL hash');
+            }
+        }
+    }, []);
 
     // Branding State
     const [branding, setBranding] = useState<{
@@ -95,14 +116,40 @@ const ViewDocument: React.FC = () => {
                 if (brandingData) setBranding(brandingData);
             }
 
-            // Track View
+            // Start basic view tracking
             trackView(data.id);
-            // Log to new audit system
+
+            // Increment Secure View Count
+            supabase.rpc('increment_view_count', { doc_id: data.id }).then(({ error }) => {
+                if (error) console.error('Failed to increment view count:', error);
+            });
+
+            // Log to audit system
             logDocumentView(data.id, {
                 metadata: {
                     viewer_agent: navigator.userAgent
                 }
             });
+
+            // SECURITY: Check Malware Scan Status
+            if (data.scan_status === 'infected') {
+                setError('This file has been flagged as malicious and cannot be accessed.');
+                return;
+            }
+            if (data.scan_status === 'pending') {
+                console.warn('File is currently being scanned.');
+                // Optional: You could block 'pending' too, but usually we allow it until proven guilty
+                // setError('File scanning in progress. Please try again in a few moments.'); 
+                // return;
+            }
+
+            // Check Max Views (Burn After Reading Fail-safe)
+            if (data.max_views && data.view_count >= data.max_views) {
+                setError('This document has reached its view limit and is no longer accessible.');
+                return;
+            }
+
+            // Check for expiration
 
             // Check for expiration
             if (data.expires_at) {
@@ -310,13 +357,23 @@ const ViewDocument: React.FC = () => {
 
             // Validate encryption keys if file is encrypted
             if (document.is_encrypted) {
-                if (!document.encryption_key || !document.encryption_iv) {
-                    console.error('Missing encryption keys:', {
-                        has_key: !!document.encryption_key,
-                        has_iv: !!document.encryption_iv
-                    });
-                    alert('Error: Encryption keys are missing for this secure file. Please contact the file owner.');
-                    return;
+                // For Vault Mode, we only need IV stored on server. Key is with client.
+                if (document.is_vault_file) {
+                    if (!document.encryption_iv) {
+                        console.error('Missing encryption IV for vault file');
+                        alert('Error: Encryption IV is missing for this secure file.');
+                        return;
+                    }
+                } else {
+                    // Standard Encryption: Need both Key and IV from server
+                    if (!document.encryption_key || !document.encryption_iv) {
+                        console.error('Missing encryption keys:', {
+                            has_key: !!document.encryption_key,
+                            has_iv: !!document.encryption_iv
+                        });
+                        alert('Error: Encryption keys are missing for this secure file. Please contact the file owner.');
+                        return;
+                    }
                 }
                 console.log('✓ Encryption keys present');
             }
@@ -335,40 +392,47 @@ const ViewDocument: React.FC = () => {
             console.log('✓ Downloaded from storage, size:', data.size, 'bytes');
 
             let blob = data;
-            let finalFileType = document.file_type;
 
-            // Decrypt if encrypted
-            if (document.is_encrypted && document.encryption_key && document.encryption_iv) {
+            // Decrypt if Vault Mode
+            if (document.is_vault_file) {
+                console.log('🔒 Processing Vault File...');
+
+                let keyToUse = vaultKey;
+
+                // If key missing, prompt user
+                if (!keyToUse) {
+                    const userInput = prompt('This is a secure Vault file. Please enter the Decryption Key:');
+                    if (!userInput) {
+                        alert('Decryption key is required to access this file.');
+                        return;
+                    }
+                    keyToUse = userInput;
+                }
+
+                if (!document.encryption_iv) {
+                    alert('Error: Encryption IV missing. File cannot be decrypted.');
+                    return;
+                }
+
                 try {
                     console.log('Attempting decryption...');
-                    console.log('Encrypted blob size:', data.size);
-                    console.log('Key length:', document.encryption_key.length);
-                    console.log('IV length:', document.encryption_iv.length);
-
-                    // Use original_file_type if available, otherwise fall back to file_type
-                    finalFileType = document.original_file_type || document.file_type;
-                    console.log('Target MIME type:', finalFileType);
+                    const finalFileType = document.original_file_type || document.file_type;
 
                     blob = await decryptFile(
                         data,
-                        document.encryption_key,
+                        keyToUse,
                         document.encryption_iv,
                         finalFileType
                     );
 
                     console.log('✓ Decryption successful, size:', blob.size, 'bytes');
-                    console.log('Decrypted blob type:', blob.type);
                 } catch (decryptError) {
                     console.error('Decryption failed:', decryptError);
-                    console.error('Decryption error details:', {
-                        message: decryptError instanceof Error ? decryptError.message : 'Unknown error',
-                        stack: decryptError instanceof Error ? decryptError.stack : undefined
-                    });
-                    alert('Failed to decrypt file. The encryption key may be invalid or the file may be corrupted.');
+                    alert('Failed to decrypt file. The key may be incorrect.');
                     return;
                 }
-            } else {
-                console.log('File is not encrypted, downloading directly');
+            } else if (document.is_encrypted && document.encryption_key && document.encryption_iv) {
+                // Legacy Encryption (Server-side key) - if we re-enable it later
             }
 
             // Verify blob has content
@@ -398,6 +462,13 @@ const ViewDocument: React.FC = () => {
             window.URL.revokeObjectURL(url);
             window.document.body.removeChild(a);
 
+            console.log('✓ Download triggered');
+
+            // BURN AFTER READING CHECK
+            if (document.burn_after_reading) {
+                await burnDocument();
+            }
+
             console.log('=== DOWNLOAD DEBUG END ===');
         } catch (err: any) {
             console.error('Download error:', err);
@@ -414,6 +485,42 @@ const ViewDocument: React.FC = () => {
                 });
             }
             setDownloading(false);
+        }
+    };
+
+    const burnDocument = async () => {
+        if (!document) return;
+
+        try {
+            console.log('🔥 Initiating Burn After Reading sequence...');
+
+            // 1. Delete file from storage
+            const { error: storageError } = await supabase.storage
+                .from('documents')
+                .remove([document.file_path]);
+
+            if (storageError) {
+                console.error('Failed to delete file from storage:', storageError);
+                // Continue to delete record anyway to prevent access
+            }
+
+            // 2. Delete document record
+            const { error: dbError } = await supabase
+                .from('documents')
+                .delete()
+                .eq('id', document.id);
+
+            if (dbError) {
+                console.error('Failed to delete document record:', dbError);
+            }
+
+            // 3. UI Feedback
+            alert('This message will self-destruct... \n\nFile has been incinerated as per "Burn After Reading" protocol.');
+            setError('This document has been burned and is no longer available.');
+            setDocument(null);
+
+        } catch (err) {
+            console.error('Error burning document:', err);
         }
     };
 
@@ -650,6 +757,13 @@ const ViewDocument: React.FC = () => {
                                     <p>Downloads are disabled for this file.</p>
                                 </div>
                             )}
+                        </div>
+                    )}
+
+                    {document.burn_after_reading && (
+                        <div style={{ marginTop: '1rem', padding: '0.75rem', background: '#fff7ed', border: '1px solid #ffedd5', borderRadius: '12px', color: '#c2410c', fontSize: '0.875rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <Flame size={18} />
+                            <span><strong>Burn After Reading:</strong> This file will be deleted permanently after you download it.</span>
                         </div>
                     )}
                 </div>

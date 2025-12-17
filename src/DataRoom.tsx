@@ -18,11 +18,11 @@ import {
     PenTool,
     UserPlus,
     Fingerprint,
-    Camera
+    Camera,
+    Flame
 } from 'lucide-react';
 import { supabase } from './lib/supabase';
-// TEMPORARY: Commented out while encryption is disabled
-// import { encryptFile } from './lib/crypto';
+import { encryptFile } from './lib/crypto';
 import { hashPassword } from './lib/security';
 import GoogleDriveTab from './components/GoogleDriveTab';
 import AnalyticsDashboard from './components/analytics/AnalyticsDashboard';
@@ -95,6 +95,9 @@ const DataRoom: React.FC = () => {
         layout: 'tiled'
     });
     const [requestSignature, setRequestSignature] = useState(false);
+    const [burnAfterRead, setBurnAfterRead] = useState(false);
+    const [vaultMode, setVaultMode] = useState(false);
+    const [generatedKey, setGeneratedKey] = useState<string | null>(null);
 
     // New Biometric/Snapshot State
     const [requireBiometric, setRequireBiometric] = useState(false);
@@ -252,24 +255,31 @@ const DataRoom: React.FC = () => {
                 throw new Error('Biometric protection is enabled but registration was not completed. Please toggle biometric protection again.');
             }
 
-            // ==========================================================
-            // TEMPORARY FIX: Encryption disabled to allow downloads
-            // Re-enable this once database RLS policies are fixed
-            // ==========================================================
+            // 1. Prepare File (Encrypt if Vault Mode)
+            let fileToUpload = selectedFile;
+            let encryptionKey: string | null = null;
+            let encryptionIv: string | null = null;
 
-            // Temporarily disable encryption
-            const fileToUpload = selectedFile;
-            // Note: key and iv are set to null in database insert below
+            if (vaultMode) {
+                console.log('🔒 Encrypting file for Vault Mode...');
+                try {
+                    const result = await encryptFile(selectedFile);
+                    const { encryptedBlob, key, iv } = result;
 
-            // Original encryption code (commented out temporarily)
-            /*
-            const result = await encryptFile(selectedFile);
-            const { encryptedBlob, key, iv } = result;
-            
-            const fileToUpload = new File([encryptedBlob], selectedFile.name, {
-                type: 'application/octet-stream'
-            });
-            */
+                    fileToUpload = new File([encryptedBlob], selectedFile.name, {
+                        type: 'application/octet-stream' // Encrypted files are binary
+                    });
+
+                    encryptionKey = key; // Keep local for Magic Link, DO NOT STORE IN DB
+                    encryptionIv = iv;   // Store IV in DB
+
+                    setGeneratedKey(key); // Save check
+                    console.log('✓ File encrypted successfully');
+                } catch (encError) {
+                    console.error('Encryption failed:', encError);
+                    throw new Error('Failed to encrypt file. Please try again.');
+                }
+            }
 
             // 2. Generate unique file path
             const timestamp = Date.now();
@@ -290,7 +300,6 @@ const DataRoom: React.FC = () => {
             if (uploadError) {
                 console.error('✗ Storage upload error:', uploadError);
                 console.error('Error details:', JSON.stringify(uploadError, null, 2));
-                console.error('Error name:', uploadError.name);
 
                 // Check if it's a CORS error
                 if (uploadError.message?.includes('fetch') || uploadError.message?.includes('CORS')) {
@@ -304,7 +313,8 @@ const DataRoom: React.FC = () => {
 
             const shareLink = Math.random().toString(36).substring(2, 12);
 
-            // 4. Save document metadata to database with encryption details
+            // 4. Save document metadata to database
+            // CRITICAL: For Vault Mode, encryption_key MUST BE NULL in Database.
             const { data: docData, error: dbError } = await supabase
                 .from('documents')
                 .insert({
@@ -325,13 +335,19 @@ const DataRoom: React.FC = () => {
                     require_biometric: requireBiometric,
                     require_snapshot: requireSnapshot,
                     biometric_credential_id: requireBiometric ? biometricCredentialId : null,
-                    // Encryption disabled temporarily
-                    encryption_key: null,
-                    encryption_iv: null,
-                    is_encrypted: false, // Changed from true to false
+                    max_views: burnAfterRead ? 1 : null,
+                    burn_after_reading: burnAfterRead,
+
+                    // Encryption / Vault Fields
+                    is_vault_file: vaultMode,
+                    is_encrypted: vaultMode,
+                    encryption_key: null, // NEVER STORE KEY FOR VAULT
+                    encryption_iv: vaultMode ? encryptionIv : null,
+
                     original_file_name: selectedFile.name,
                     original_file_type: selectedFile.type,
-                    user_id: user?.id || null // Store authenticated user ID
+                    user_id: user?.id || null, // Store authenticated user ID
+                    scan_status: 'pending'
                 })
                 .select()
                 .single();
@@ -342,13 +358,20 @@ const DataRoom: React.FC = () => {
             }
             console.log('Document metadata saved successfully');
 
+            // Construct Link
+            // If Vault Mode, append key hash
+            let finalLink = `${window.location.origin}/view/${shareLink}`;
+            if (vaultMode && encryptionKey) {
+                finalLink += `#key=${encodeURIComponent(encryptionKey)}`;
+            }
+
             const newDoc: Document = {
                 id: docData.id,
                 name: selectedFile.name,
                 size: (selectedFile.size / 1024).toFixed(2) + ' KB',
                 type: selectedFile.type,
                 uploadedAt: new Date().toLocaleDateString(),
-                link: `${window.location.origin}/view/${shareLink}`,
+                link: finalLink,
                 file_path: filePath,
                 settings: {
                     password: passwordProtection ? 'protected' : '',
@@ -532,7 +555,15 @@ const DataRoom: React.FC = () => {
                                                 </div>
                                                 <div>
                                                     <h3 style={{ fontSize: '1rem', fontWeight: '600', color: '#111827', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '160px' }}>{doc.name}</h3>
-                                                    <p style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '0.25rem' }}>{doc.size} • {doc.uploadedAt}</p>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.25rem' }}>
+                                                        <p style={{ fontSize: '0.75rem', color: '#6b7280', margin: 0 }}>{doc.size} • {doc.uploadedAt}</p>
+                                                        {((doc as any).scan_status === 'pending') && (
+                                                            <span style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', borderRadius: '4px', background: '#e0f2fe', color: '#0284c7', border: '1px solid #bae6fd' }}>Scanning...</span>
+                                                        )}
+                                                        {((doc as any).scan_status === 'infected') && (
+                                                            <span style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', borderRadius: '4px', background: '#fee2e2', color: '#dc2626', border: '1px solid #fca5a5' }}>INFECTED</span>
+                                                        )}
+                                                    </div>
                                                 </div>
                                             </div>
                                             <button
@@ -718,6 +749,39 @@ const DataRoom: React.FC = () => {
                                                 }}
                                             />
                                         )}
+                                    </div>
+
+                                    {/* Vault Mode */}
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '0.5rem', padding: '0.75rem', background: '#1e1b4b', borderRadius: '8px', border: '1px solid #4338ca' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                                <Shield size={18} style={{ color: '#818cf8' }} />
+                                                <div>
+                                                    <span style={{ fontSize: '0.95rem', fontWeight: '600', color: '#e0e7ff', display: 'block' }}>Vault Mode (Client-Side Encryption)</span>
+                                                    <span style={{ fontSize: '0.75rem', color: '#a5b4fc' }}>Zero-Knowledge: Server cannot read file.</span>
+                                                </div>
+                                            </div>
+                                            <label className="toggle-switch">
+                                                <input type="checkbox" checked={vaultMode} onChange={(e) => setVaultMode(e.target.checked)} />
+                                                <span className="toggle-slider"></span>
+                                            </label>
+                                        </div>
+                                    </div>
+
+                                    {/* Scan Status Badge (for list view, not settings) - keeping placeholder location */}
+
+                                    {/* Burn-on-Read */}
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                                <Flame size={18} style={{ color: '#f97316' }} />
+                                                <span style={{ fontSize: '0.95rem', fontWeight: '500', color: '#374151' }}>Burn After Reading (1 View)</span>
+                                            </div>
+                                            <label className="toggle-switch">
+                                                <input type="checkbox" checked={burnAfterRead} onChange={(e) => setBurnAfterRead(e.target.checked)} />
+                                                <span className="toggle-slider"></span>
+                                            </label>
+                                        </div>
                                     </div>
 
                                     {/* Allow Downloads */}
